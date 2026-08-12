@@ -28,12 +28,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # vcan is not in the runner's default kernel package. Try to get it; if
+      # it cannot be had, the CAN suite is skipped rather than silently passing
+      # or failing the whole run over an environment gap.
       - name: vcan for the CAN bridge tests
+        id: vcan
         run: |
-          sudo modprobe vcan
-          sudo ip link add dev vcan0 type vcan
-          sudo ip link set up vcan0
-          ip -br link show type vcan
+          if ! sudo modprobe vcan 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || true
+            sudo modprobe vcan 2>/dev/null || true
+          fi
+          if sudo ip link add dev vcan0 type vcan 2>/dev/null; then
+            sudo ip link set up vcan0
+            ip -br link show type vcan
+            echo "available=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::vcan unavailable on this runner; the CAN bridge suite is skipped"
+            echo "available=no" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: ouster-edge
         working-directory: package/keti/ouster-edge/test
@@ -45,11 +58,16 @@ jobs:
           OUSTER_EDGE_BIN=./ouster-edge python3 test_zones.py
           sh test_metadata.sh
 
-      - name: can-bridge
+      # Always compiled, even when it cannot be run: a compile break is the
+      # regression most likely to slip through otherwise.
+      - name: can-bridge (compile)
         working-directory: package/keti/can-bridge/test
-        run: |
-          cc -O2 -Wall -Wextra -Werror -o can-bridge ../src/can-bridge.c
-          CAN_BRIDGE_BIN=./can-bridge python3 test_bridge.py
+        run: cc -O2 -Wall -Wextra -Werror -o can-bridge ../src/can-bridge.c
+
+      - name: can-bridge (run)
+        if: steps.vcan.outputs.available == 'yes'
+        working-directory: package/keti/can-bridge/test
+        run: CAN_BRIDGE_BIN=./can-bridge python3 test_bridge.py
 
       - name: rc-ibus
         working-directory: package/keti/rc-ibus/test
