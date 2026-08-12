@@ -15,7 +15,6 @@
 		led-failsafe = &led_cpu;
 		led-running = &led_cpu;
 		led-upgrade = &led_cpu;
-		label-mac-device = &gmac0;
 	};
 
 	leds {
