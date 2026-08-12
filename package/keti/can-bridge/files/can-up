@@ -10,6 +10,24 @@
 IFACE="${1:-can0}"
 BITRATE="${2:-500000}"
 
+# A virtual interface has no bitrate to set, so it needs none of what follows.
+# Useful on its own: can-bridge can then be exercised against vcan on the router
+# itself, not only against a real adapter.
+VIRTUAL=no
+if [ "$(cat "/sys/class/net/$IFACE/type" 2>/dev/null)" = "280" ] &&
+   [ ! -d "/sys/class/net/$IFACE/device" ]; then
+	VIRTUAL=yes
+fi
+
+# BusyBox's ip cannot configure a CAN link - it rejects `type can` outright with
+# "type is garbage" - so check for the real one before producing a confusing
+# failure. The package depends on ip-full for this reason.
+if [ "$VIRTUAL" = no ] && ! ip link help 2>&1 | grep -q "type TYPE"; then
+	echo "this ip is BusyBox's and cannot configure CAN links." >&2
+	echo "install ip-full:  opkg install ip-full" >&2
+	exit 2
+fi
+
 if [ ! -d "/sys/class/net/$IFACE" ]; then
 	echo "no $IFACE. Checks:" >&2
 	echo "  lsusb                       # is the adapter enumerated?" >&2
@@ -21,12 +39,19 @@ if [ ! -d "/sys/class/net/$IFACE" ]; then
 	exit 1
 fi
 
-ip link set "$IFACE" down 2>/dev/null
-if ! ip link set "$IFACE" type can bitrate "$BITRATE"; then
-	echo "could not set bitrate $BITRATE on $IFACE" >&2
-	exit 1
+if [ "$VIRTUAL" = yes ]; then
+	ip link set "$IFACE" up || exit 1
+	echo "$IFACE up (virtual: no bitrate to set)"
+else
+	ip link set "$IFACE" down 2>/dev/null
+	if ! ip link set "$IFACE" type can bitrate "$BITRATE"; then
+		echo "could not set bitrate $BITRATE on $IFACE" >&2
+		exit 1
+	fi
+	ip link set "$IFACE" up || exit 1
+	echo "$IFACE up at $BITRATE bps"
 fi
-ip link set "$IFACE" up || exit 1
-
-echo "$IFACE up at $BITRATE bps"
-ip -details -statistics link show "$IFACE" | sed -n '1,6p'
+# -details and -statistics are iproute2 features; with ip-full present they are
+# available, and they are where bus errors show up.
+ip -details -statistics link show "$IFACE" 2>/dev/null | sed -n '1,8p' ||
+	ip link show "$IFACE"

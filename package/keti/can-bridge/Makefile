@@ -13,10 +13,15 @@ define Package/can-bridge
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Bridge a SocketCAN interface onto the network (read-only by default)
-  DEPENDS:=+kmod-can +kmod-can-raw +kmod-can-usb-gs +kmod-usb-core
+  DEPENDS:=+kmod-can +kmod-can-raw +kmod-can-usb-gs +kmod-usb-core \
+	+ip-full
 endef
 
 define Package/can-bridge/description
+ Needs ip-full: BusyBox's ip cannot configure a CAN link at all - it answers
+ "type is garbage" - so the default install could bring up a bus only by
+ accident. That was found by booting this under QEMU, not by reading it.
+
  Forwards CAN frames from a SocketCAN interface to a UDP peer and keeps a
  decoded snapshot of selected ids for a dashboard. Injection from the network
  onto the bus is refused unless explicitly enabled, because a wireless hop does
