@@ -1,0 +1,32 @@
+#!/bin/sh
+# can-up - bring a USB-CAN interface up at the right bitrate.
+#
+# MT7621 has no CAN controller, so this only works with a USB adapter. The
+# gs_usb driver covers CANable and candleLight-compatible dongles, which is
+# what AgileX's own documentation uses.
+#
+# Usage: can-up [interface] [bitrate]
+
+IFACE="${1:-can0}"
+BITRATE="${2:-500000}"
+
+if [ ! -d "/sys/class/net/$IFACE" ]; then
+	echo "no $IFACE. Checks:" >&2
+	echo "  lsusb                       # is the adapter enumerated?" >&2
+	echo "  logread | grep -i gs_usb    # did the driver bind?" >&2
+	echo "  opkg list-installed | grep can" >&2
+	echo >&2
+	echo "Note the router has a single USB port. If the camera is plugged in," >&2
+	echo "the CAN adapter needs a hub - see doc/CAN.md." >&2
+	exit 1
+fi
+
+ip link set "$IFACE" down 2>/dev/null
+if ! ip link set "$IFACE" type can bitrate "$BITRATE"; then
+	echo "could not set bitrate $BITRATE on $IFACE" >&2
+	exit 1
+fi
+ip link set "$IFACE" up || exit 1
+
+echo "$IFACE up at $BITRATE bps"
+ip -details -statistics link show "$IFACE" | sed -n '1,6p'
