@@ -24,7 +24,7 @@ import time
 
 BIN = os.environ.get("CAN_BRIDGE_BIN", "./can-bridge")
 IFACE = os.environ.get("CAN_IFACE", "vcan0")
-UDP_PORT, INJECT_PORT = 17700, 17701
+UDP_PORT, INJECT_PORT = 26700, 26701
 
 MAGIC = b"BCAN"
 HDR, REC = 8, 16
