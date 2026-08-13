@@ -40,7 +40,8 @@ endef
 
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) $(TARGET_LDFLAGS) \
-		-o $(PKG_BUILD_DIR)/can-bridge $(PKG_BUILD_DIR)/can-bridge.c
+		-o $(PKG_BUILD_DIR)/can-bridge \
+		$(PKG_BUILD_DIR)/can-bridge.c $(PKG_BUILD_DIR)/agilex.c
 endef
 
 define Package/can-bridge/install

@@ -85,8 +85,57 @@ is no `candump` on the device. It logs each distinct id the first time it is
 seen. Once you know the ids, put them in `option track` and they appear decoded
 in the dashboard's CAN panel and in `/var/run/can-bridge.json`.
 
-Do not copy ids from a forum post. They differ between AgileX firmware versions,
-and a wrong id silently decodes the wrong bytes. Read them off your own vehicle.
+## Decoding an AgileX vehicle
+
+`option agilex '1'` turns raw hex into named values. The ids, field layouts and
+scale factors come from AgileX's own SDK - `src/protocol_v2/agilex_protocol_v2.h`
+for the layouts and `agilex_msg_parser_v2.c` for the scaling, in
+[ugv_sdk](https://github.com/agilexrobotics/ugv_sdk) - not from a forum post.
+That distinction matters: the notes circulating for this vehicle say `0x251` is
+motion feedback, and it is not. Motion state is **`0x221`**; `0x251` is the first
+actuator's high-speed state. Both carry plausible small numbers, so the mix-up
+survives a glance at a dashboard.
+
+| id | meaning |
+|---|---|
+| `0x211` | system state: vehicle state, control mode, battery (0.1 V), error bitmap |
+| `0x221` | motion state: linear, angular, lateral, steering (mm/s, mrad/s) |
+| `0x241` | RC state |
+| `0x251`–`0x258` | actuator high-speed: rpm, current (0.1 A), pulse count |
+| `0x261`–`0x268` | actuator low-speed: driver volts, driver temp, motor temp, driver state |
+| `0x291` | motion mode state |
+| `0x311` | odometry: left and right wheel, 32-bit signed |
+| `0x361` | BMS: SoC, SoH, volts, amps, temperature (0.1 units) |
+| `0x111`/`0x121`/`0x131`/`0x141` | commands. Recognised for naming; never emitted |
+
+**The payload is big-endian.** The SDK's `struct16_t` is `{high_byte, low_byte}`,
+so every 16-bit field is most-significant byte first. Everything else in this tree
+is little-endian, which makes this the obvious place to get it wrong, and a
+wrong-endian read of 1.0 m/s is −6.144 m/s rather than something obviously absurd.
+
+Decoding is **off by default**. On a bus that is not an AgileX vehicle these ids
+mean something else, and named fields would be confident nonsense.
+
+### Skid or Omni
+
+The daemon does not need telling. Both share the same feedback frames -
+`MotionStateFrame` always carries a lateral field - and differ only in that the
+Omni can be *commanded* sideways. So a non-zero lateral velocity, or a motion-mode
+frame at all, means mecanum wheels, and the status file reports what it observed:
+
+```json
+"agilex": { "variant": "omni (mecanum: lateral motion observed)", ... }
+```
+
+Before enough frames it says `unknown (no motion state yet)`, which is honest
+rather than a guess.
+
+### Still read your own ids
+
+`option discover '1'` first, regardless. Firmware versions differ, and if
+`undecoded` climbs while `decoded` stays flat, this is not a protocol-v2 vehicle
+and the table above does not apply. The raw bytes are always reported alongside
+the decoded fields, so nothing is lost either way.
 
 ## Injection is off by default, on purpose
 

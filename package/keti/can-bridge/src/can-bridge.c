@@ -38,6 +38,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "agilex.h"
+
 #define MAGIC		0x4e414342u	/* "BCAN" little-endian */
 #define VERSION		1
 #define MAX_BATCH	24
@@ -72,6 +74,12 @@ static struct {
 	bool discover;
 	uint32_t seen_ids[MAX_TRACK];
 	int nseen;
+
+	/* AgileX protocol v2 decoding, off unless asked for: on a bus that is not
+	 * an AgileX vehicle, these ids mean something else entirely and named
+	 * fields would be confident nonsense. */
+	bool agilex;
+	struct agx_state agx;
 } g;
 
 static volatile sig_atomic_t stop_requested;
@@ -149,6 +157,9 @@ static void track_update(const struct can_frame *f)
 	if (g.discover)
 		discover_note(f->can_id & CAN_EFF_MASK);
 
+	if (g.agilex)
+		agx_decode(&g.agx, f->can_id & CAN_EFF_MASK, f->data, f->can_dlc);
+
 	t = track_find(f->can_id & CAN_EFF_MASK);
 
 	if (!t)
@@ -197,7 +208,59 @@ static void status_write(void)
 			(unsigned long long)t->count,
 			(unsigned long long)(now_ms() - t->last_ms));
 	}
-	fprintf(fp, "%s}\n}\n", j ? "\n\t" : "");
+	fprintf(fp, "%s}", j ? "\n\t" : "");
+
+	if (g.agilex) {
+		const struct agx_state *a = &g.agx;
+		int k, first;
+
+		fprintf(fp, ",\n\t\"agilex\": {\n");
+		fprintf(fp, "\t\t\"variant\": \"%s\",\n", agx_variant(a));
+		fprintf(fp, "\t\t\"decoded\": %llu,\n",
+			(unsigned long long)a->decoded);
+		fprintf(fp, "\t\t\"undecoded\": %llu", 
+			(unsigned long long)a->unknown);
+		if (a->system_valid)
+			fprintf(fp, ",\n\t\t\"vehicle_state\": %u,"
+				"\n\t\t\"control_mode\": %u,"
+				"\n\t\t\"battery_v\": %.1f,"
+				"\n\t\t\"error_code\": %u",
+				a->vehicle_state, a->control_mode,
+				a->battery_v, a->error_code);
+		if (a->motion_valid)
+			fprintf(fp, ",\n\t\t\"linear_mps\": %.3f,"
+				"\n\t\t\"angular_rps\": %.3f,"
+				"\n\t\t\"lateral_mps\": %.3f",
+				a->linear_mps, a->angular_rps, a->lateral_mps);
+		if (a->bms_valid)
+			fprintf(fp, ",\n\t\t\"soc\": %u,"
+				"\n\t\t\"bms_v\": %.1f,"
+				"\n\t\t\"bms_a\": %.1f,"
+				"\n\t\t\"bms_temp_c\": %.1f",
+				a->soc, a->bms_v, a->bms_a, a->bms_temp_c);
+		if (a->odom_valid)
+			fprintf(fp, ",\n\t\t\"left_wheel\": %d,"
+				"\n\t\t\"right_wheel\": %d",
+				a->left_wheel, a->right_wheel);
+		fprintf(fp, ",\n\t\t\"rpm\": [");
+		for (k = 0, first = 1; k < AGX_ACTUATORS; k++) {
+			if (!a->act_hs_valid[k])
+				continue;
+			fprintf(fp, "%s%d", first ? "" : ", ", a->rpm[k]);
+			first = 0;
+		}
+		fprintf(fp, "],\n\t\t\"motor_temp_c\": [");
+		for (k = 0, first = 1; k < AGX_ACTUATORS; k++) {
+			if (!a->act_ls_valid[k])
+				continue;
+			fprintf(fp, "%s%d", first ? "" : ", ",
+				(int)a->motor_temp_c[k]);
+			first = 0;
+		}
+		fprintf(fp, "]\n\t}");
+	}
+
+	fprintf(fp, "\n}\n");
 	fclose(fp);
 
 	if (rename(tmp, g.status_path) < 0)
@@ -215,6 +278,9 @@ static void usage(const char *a0)
 "                         Without this the bridge is read-only, which is the\n"
 "                         right default for a vehicle bus.\n"
 "  -t, --track ID[,ID...] hex CAN IDs to decode into the status file\n"
+"  -A, --agilex           decode AgileX protocol v2 into named fields. Off by\n"
+"                         default: on any other bus these ids mean something\n"
+"                         else and named values would be confident nonsense.\n"
 "  -d, --discover         log every distinct id seen. can-utils is not in the\n"
 "                         OpenWrt feeds, so this is how you find out what a\n"
 "                         vehicle actually emits.\n"
@@ -263,6 +329,7 @@ int main(int argc, char **argv)
 		{ "allow-inject",    no_argument,       NULL, OPT_ALLOW_INJECT },
 		{ "track",           required_argument, NULL, 't' },
 		{ "discover",        no_argument,       NULL, 'd' },
+		{ "agilex",          no_argument,       NULL, 'A' },
 		{ "status",          required_argument, NULL, 'S' },
 		{ "status-interval", required_argument, NULL, 'I' },
 		{ "foreground",      no_argument,       NULL, 'f' },
@@ -282,7 +349,7 @@ int main(int argc, char **argv)
 	g.status_path = (char *)"/var/run/can-bridge.json";
 	g.status_ms = 200;
 
-	while ((opt = getopt_long(argc, argv, "i:r:l:t:S:I:dfh", opts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "i:r:l:t:S:I:dAfh", opts, NULL)) != -1) {
 		switch (opt) {
 		case 'i': g.ifname = optarg; break;
 		case 'r':
@@ -296,6 +363,7 @@ int main(int argc, char **argv)
 		case OPT_ALLOW_INJECT: g.allow_inject = true; break;
 		case 't': parse_track(optarg); break;
 		case 'd': g.discover = true; break;
+		case 'A': g.agilex = true; break;
 		case 'S': g.status_path = optarg; break;
 		case 'I': g.status_ms = atoi(optarg); break;
 		case 'f': g.foreground = true; break;
@@ -367,6 +435,8 @@ int main(int argc, char **argv)
 	       g.ntrack,
 	       g.allow_inject ? "ALLOWED" : "blocked (read-only)",
 	       g.discover ? ", discover on" : "");
+	if (g.agilex)
+		logmsg(LOG_NOTICE, "AgileX protocol v2 decoding enabled");
 
 	while (!stop_requested) {
 		int np = 0;

@@ -8,7 +8,7 @@ PROG=/usr/sbin/can-bridge
 
 start_service() {
 	local enabled interface bitrate remote listen allow_inject track
-	local discover status_interval
+	local discover status_interval agilex
 
 	config_load can-bridge
 	config_get_bool enabled bus enabled 0
@@ -21,6 +21,7 @@ start_service() {
 	config_get_bool allow_inject bus allow_inject 0
 	config_get track     bus track
 	config_get_bool discover bus discover 0
+	config_get_bool agilex bus agilex 0
 	config_get status_interval bus status_interval 200
 
 	# The interface has to exist and be up before the bridge can bind it.
@@ -39,6 +40,7 @@ start_service() {
 	[ -n "$listen" ] && procd_append_param command --listen "$listen"
 	[ -n "$track" ]  && procd_append_param command --track "$track"
 	[ "$discover" = "1" ] && procd_append_param command --discover
+	[ "$agilex" = "1" ] && procd_append_param command --agilex
 	if [ "$allow_inject" = "1" ]; then
 		procd_append_param command --allow-inject
 		logger -t can-bridge "WARNING: network-to-bus injection is ENABLED"
