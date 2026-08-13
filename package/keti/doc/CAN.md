@@ -29,7 +29,7 @@ traffic. A CAN dongle is Full Speed and rides the USB 2.0 lanes of the same hub
 without competing for it. A 2.0-only hub would drag the camera down to High
 Speed and share that bandwidth.
 
-## Wiring, for an AgileX SCOUT MINI
+## Wiring, for an AgileX SCOUT MINI Omni
 
 Only two of the four pins are the bus. From the vehicle's own manual, with the
 key oriented as the manual shows: pin 1 = +23–29 V, pin 2 = GND, pin 3 = CAN_H,
@@ -129,6 +129,11 @@ frame at all, means mecanum wheels, and the status file reports what it observed
 
 Before enough frames it says `unknown (no motion state yet)`, which is honest
 rather than a guess.
+
+The vehicle on this bench is the **Omni** — mecanum wheels, so it translates
+sideways and diagonally. That is why the teleop path carries three axes rather
+than two: see `TELEOP.md`. The inference stays in anyway, because it is the check
+that the bus agrees with that assumption.
 
 ### Still read your own ids
 
