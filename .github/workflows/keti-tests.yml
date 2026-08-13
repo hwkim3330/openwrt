@@ -1,8 +1,9 @@
 # Runs the KETI sensor-bridge test suites on every push that touches them.
 #
 # These are the suites that need no target hardware: the Ouster parser against
-# synthesised packets, the CAN bridge against vcan, the i-BUS decoder against a
-# pty, the teleop safety properties, and the AFHDS 2A frame builders. Together
+# synthesised packets, the AgileX decoder against hand-built frames, the CAN
+# bridge against vcan, the i-BUS decoder against a pty, the teleop safety
+# properties, and the AFHDS 2A frame builders. Together
 # they are what stands in for a lidar, a vehicle and an RC receiver that are not
 # on the bench, so a regression in them is a regression nobody would otherwise
 # notice until the hardware arrived.
@@ -59,10 +60,26 @@ jobs:
           sh test_metadata.sh
 
       # Always compiled, even when it cannot be run: a compile break is the
-      # regression most likely to slip through otherwise.
+      # regression most likely to slip through otherwise. agilex.c has to be on
+      # the command line - can-bridge.c calls agx_decode() and agx_variant(),
+      # so compiling it alone fails at link, which is how this step spent its
+      # whole life red instead of guarding anything.
       - name: can-bridge (compile)
         working-directory: package/keti/can-bridge/test
-        run: cc -O2 -Wall -Wextra -Werror -o can-bridge ../src/can-bridge.c
+        run: |
+          cc -O2 -Wall -Wextra -Werror -o can-bridge \
+            ../src/can-bridge.c ../src/agilex.c
+
+      # No vcan needed: this is pure decode against hand-built frames, so it is
+      # the one CAN check that runs everywhere. It guards the two mistakes the
+      # protocol invites - reading the big-endian payload little-endian, and
+      # confusing 0x221 (motion state) with 0x251 (first actuator).
+      - name: agilex protocol decode
+        working-directory: package/keti/can-bridge/test
+        run: |
+          cc -O2 -Wall -Wextra -Werror -o test_agilex \
+            test_agilex.c ../src/agilex.c
+          ./test_agilex
 
       - name: can-bridge (run)
         if: steps.vcan.outputs.available == 'yes'
