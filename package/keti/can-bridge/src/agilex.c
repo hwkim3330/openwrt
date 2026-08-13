@@ -22,6 +22,34 @@ static int32_t be32s(const uint8_t *p)
 			 ((uint32_t)p[2] << 8) | p[3]);
 }
 
+/* Saturating convert to a big-endian int16 at a given scale. */
+static void be16_sat(uint8_t *p, double v, double scale)
+{
+	double s = v * scale;
+	long n;
+
+	/* Round half away from zero, then clamp. Truncation would bias every
+	 * command toward zero, which is harmless, but wrapping would not be. */
+	n = (long)(s < 0 ? s - 0.5 : s + 0.5);
+	if (n > 32767)
+		n = 32767;
+	if (n < -32768)
+		n = -32768;
+
+	p[0] = (uint8_t)(((uint16_t)(int16_t)n >> 8) & 0xff);
+	p[1] = (uint8_t)((uint16_t)(int16_t)n & 0xff);
+}
+
+void agx_encode_motion(uint8_t out[8], double linear_mps, double angular_rps,
+		       double lateral_mps)
+{
+	be16_sat(out + 0, linear_mps, 1000.0);		/* mm/s   */
+	be16_sat(out + 2, angular_rps, 1000.0);		/* mrad/s */
+	be16_sat(out + 4, lateral_mps, 1000.0);		/* mm/s   */
+	be16_sat(out + 6, 0.0, 1000.0);			/* steering angle: unused
+							 * on a mecanum base */
+}
+
 const char *agx_id_name(uint32_t id)
 {
 	switch (id) {

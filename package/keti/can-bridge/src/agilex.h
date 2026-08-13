@@ -17,8 +17,9 @@
  *    actuator's high-speed state. Getting those two confused yields plausible
  *    numbers that are wrong, which is the worst kind.
  *
- * This decodes only. Nothing here builds a command frame: see doc/CAN.md for why
- * commanding a vehicle from the router is off by default.
+ * Decoding is the bulk of this file. There is one encoder, agx_encode_motion(),
+ * for the single command this tree ever sends; see doc/CAN.md for why commanding
+ * a vehicle from the router is off unless it is explicitly turned on.
  */
 
 #ifndef AGILEX_H
@@ -118,5 +119,33 @@ bool agx_decode(struct agx_state *s, uint32_t can_id, const uint8_t *data,
 /* A short human name for an id, or NULL. Used in logs and the status file so a
  * raw dump becomes readable without a lookup table to hand. */
 const char *agx_id_name(uint32_t can_id);
+
+/*
+ * Build the payload of a MotionCommand (0x111).
+ *
+ * The frame mirrors MotionState (0x221): four big-endian int16 in mm/s, mrad/s,
+ * mm/s, mrad. Values are given here in physical units and saturate at the int16
+ * range rather than wrapping, because a wrapped velocity is full speed in the
+ * opposite direction.
+ *
+ * Sign convention, REP-103 as the AgileX SDK's own ROS wrapper uses it:
+ *
+ *   linear  > 0  forward
+ *   angular > 0  anticlockwise seen from above
+ *   lateral > 0  to the LEFT
+ *
+ * The lateral sign is the one thing here that has NOT been checked against a
+ * vehicle. It follows from the SDK mapping linear_y straight through and from
+ * ROS taking +y as left, but nothing in this tree has watched a SCOUT MINI Omni
+ * strafe. Confirm it at walking pace with the wheels clear before trusting it,
+ * and if it is inverted set `lateral_invert` in the config rather than editing
+ * this function - the convention documented here should keep describing the
+ * protocol, not the last board someone tested.
+ *
+ * This is the only function in this file that builds a frame rather than reading
+ * one. Nothing calls it unless command output has been explicitly enabled.
+ */
+void agx_encode_motion(uint8_t out[8], double linear_mps, double angular_rps,
+		       double lateral_mps);
 
 #endif /* AGILEX_H */

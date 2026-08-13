@@ -1,9 +1,10 @@
 # Runs the KETI sensor-bridge test suites on every push that touches them.
 #
 # These are the suites that need no target hardware: the Ouster parser against
-# synthesised packets, the AgileX decoder against hand-built frames, the CAN
-# bridge against vcan, the i-BUS decoder against a pty, the teleop safety
-# properties, and the AFHDS 2A frame builders. Together
+# synthesised packets, the AgileX decoder against hand-built frames, the motion
+# command encoder against a running agx-cmd, the CAN bridge against vcan, the
+# i-BUS decoder against a pty, the teleop safety properties, and the AFHDS 2A
+# frame builders. Together
 # they are what stands in for a lidar, a vehicle and an RC receiver that are not
 # on the bench, so a regression in them is a regression nobody would otherwise
 # notice until the hardware arrived.
@@ -85,6 +86,18 @@ jobs:
         if: steps.vcan.outputs.available == 'yes'
         working-directory: package/keti/can-bridge/test
         run: CAN_BRIDGE_BIN=./can-bridge python3 test_bridge.py
+
+      # The only code here that can move a vehicle, so its safety properties are
+      # asserted against a running daemon rather than reviewed: silence while
+      # disarmed, full stick meaning the configured limit and not more, a step
+      # input ramped, the deadman ending in a stop and then silence, and exit
+      # putting a zero on the wire.
+      - name: agx-cmd safety properties
+        working-directory: package/keti/agx-cmd/test
+        run: |
+          cc -O2 -Wall -Wextra -Werror -I../../can-bridge/src -o agx-cmd \
+            ../src/agx-cmd.c ../../can-bridge/src/agilex.c
+          AGX_CMD_BIN=./agx-cmd python3 test_agx_cmd.py
 
       - name: rc-ibus
         working-directory: package/keti/rc-ibus/test

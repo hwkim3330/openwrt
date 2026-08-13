@@ -227,6 +227,57 @@ int main(void)
 	eqi("nothing decoded", s.decoded, 0);
 	ok("unknown id has no name", agx_id_name(0x7ff) == NULL);
 
+	/* ---- the one encoder: MotionCommand 0x111 ---- */
+	printf("\n--- encode motion command 0x111 ---\n");
+	{
+		uint8_t e[8];
+
+		/* 0x111 and 0x221 share a layout, so decoding what was encoded
+		 * is a genuine round trip rather than a restatement of the
+		 * same constants. */
+		agx_encode_motion(e, 1.0, -0.5, 0.3);
+		memset(&s, 0, sizeof(s));
+		agx_decode(&s, 0x221, e, 8);
+		eqd("round trip linear", s.linear_mps, 1.0);
+		eqd("round trip angular", s.angular_rps, -0.5);
+		eqd("round trip lateral", s.lateral_mps, 0.3);
+		eqd("steering unused on a mecanum base", s.steering_rad, 0.0);
+
+		/* Big-endian on the wire. 1.0 m/s is 1000 = 0x03E8, so the high
+		 * byte leads; little-endian would put 0xE8 first. */
+		eqi("high byte first", e[0], 0x03);
+		eqi("low byte second", e[1], 0xE8);
+
+		/* Saturation, not wrapping. This is the safety-relevant one: a
+		 * wrapped velocity is full speed the other way. 40 m/s is
+		 * 40000, past int16, and must clamp to 32767 rather than
+		 * becoming -25536. */
+		agx_encode_motion(e, 40.0, 0.0, 0.0);
+		memset(&s, 0, sizeof(s));
+		agx_decode(&s, 0x221, e, 8);
+		ok("over-range clamps positive", s.linear_mps > 32.0);
+		ok("over-range did NOT wrap negative", s.linear_mps > 0.0);
+		eqd("clamped to int16 max", s.linear_mps, 32.767);
+
+		agx_encode_motion(e, -40.0, 0.0, 0.0);
+		memset(&s, 0, sizeof(s));
+		agx_decode(&s, 0x221, e, 8);
+		ok("under-range did NOT wrap positive", s.linear_mps < 0.0);
+		eqd("clamped to int16 min", s.linear_mps, -32.768);
+
+		/* Zero must be exactly zero: this is what a deadman emits. */
+		agx_encode_motion(e, 0.0, 0.0, 0.0);
+		ok("neutral is all zero bytes",
+		   !e[0] && !e[1] && !e[2] && !e[3] &&
+		   !e[4] && !e[5] && !e[6] && !e[7]);
+
+		/* Rounding away from zero, so a small command does not vanish. */
+		agx_encode_motion(e, 0.0006, 0.0, 0.0);
+		memset(&s, 0, sizeof(s));
+		agx_decode(&s, 0x221, e, 8);
+		eqd("small command survives rounding", s.linear_mps, 0.001);
+	}
+
 	printf("\n");
 	if (fails) {
 		printf("FAILED (%d)\n", fails);
