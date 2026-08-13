@@ -127,7 +127,21 @@ uci commit ouster-edge && /etc/init.d/ouster-edge start
 logread -e ouster-edge               # expect the detected profile and packet size
 ```
 
-**The number to watch is `missed_columns`, and it must stay at zero:**
+**The number to watch is `missed_columns`, and it must stay at zero — but only
+once the sensor's azimuth window is known.**
+
+A sensor restricted to an arc does not send the columns outside it, and their
+measurement ids are simply absent from the stream. On the bench a perfectly
+healthy OS-1-64 set to `[315000, 45000]` reported **72% missing columns** until
+the window was passed through, because every revolution legitimately skipped
+three quarters of its ids. `ouster-metadata` now reads `azimuth_window` from the
+sensor and the init script hands it to the daemon, so check that it arrived
+before believing this number:
+
+```sh
+grep -o '"azimuth_window": \[[^]]*\]' /var/run/ouster-edge.json   # or absent for a full sweep
+```
+
 
 ```sh
 sensor-lan-tune
