@@ -1,0 +1,30 @@
+#!/bin/sh
+# Start the CAN bridge when a CAN interface appears.
+#
+# can-bridge.init refuses to start when the interface is missing, and that is
+# the right call on its own: it has to run can-up first to set the bitrate, and
+# a bridge bound to nothing is worse than no bridge. But returning early means
+# procd never registers an instance, so the "respawn" parameter has nothing to
+# respawn. Plug the USB-CAN adapter in after boot - which is the normal case,
+# since the vehicle is not usually powered before the router - and the bridge
+# would stay down until someone noticed and started it by hand.
+#
+# mic-stream solves the same problem by retrying inside the daemon; the CAN
+# bridge cannot, because bringing the interface up is a separate privileged
+# step that belongs to the init script.
+
+[ "$ACTION" = "add" ] || exit 0
+
+case "$DEVICENAME" in
+can*|vcan*) ;;
+*) exit 0 ;;
+esac
+
+[ -x /etc/init.d/can-bridge ] || exit 0
+
+# Respects the UCI enable flag: if the bus section is disabled, start_service
+# returns without doing anything, so this stays a no-op.
+/etc/init.d/can-bridge enabled || exit 0
+
+logger -t can-bridge "$DEVICENAME appeared; starting bridge"
+/etc/init.d/can-bridge restart

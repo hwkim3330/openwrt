@@ -52,6 +52,9 @@ define Package/can-bridge/install
 	$(INSTALL_BIN) ./files/can-bridge.init $(1)/etc/init.d/can-bridge
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/can-bridge.config $(1)/etc/config/can-bridge
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
+	$(INSTALL_BIN) ./files/can-bridge.hotplug \
+		$(1)/etc/hotplug.d/net/30-can-bridge
 endef
 
 $(eval $(call BuildPackage,can-bridge))

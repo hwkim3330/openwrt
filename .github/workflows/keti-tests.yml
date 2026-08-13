@@ -108,6 +108,7 @@ jobs:
         run: |
           fail=0
           for f in $(find package/keti -type f \( -name '*.init' -o -name 'can-up' \
+                     -o -name '*.hotplug' \
                      -o -name 'sensor-probe' -o -name 'sensor-lan-tune' \
                      -o -name 'ouster-metadata' -o -name 'first-boot-report' \
                      -o -name '99-a3004-sensorkit' \)); do
