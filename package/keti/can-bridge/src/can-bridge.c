@@ -75,6 +75,26 @@ static struct {
 	uint32_t seen_ids[MAX_TRACK];
 	int nseen;
 
+	/*
+	 * Which generation of the AgileX protocol this bus is speaking.
+	 *
+	 * Not a guess: this is how the vendor's own ugv_sdk decides, in
+	 * src/utilities/protocol_detector.cpp. Frame 0x151 exists only in v1 and
+	 * frames 0x221/0x241 only in v2, so hearing one of them settles it, and
+	 * hearing both means something is wrong rather than something is new.
+	 *
+	 * It matters because agilex.c implements v2. On a v1 vehicle both the
+	 * decoder and agx_encode_motion() would be addressing the wrong
+	 * generation, and the official demo for the Scout Mini Omni detects at
+	 * runtime rather than assuming - so this vehicle can be either.
+	 *
+	 * Listening only. Detection never puts a frame on the bus.
+	 */
+	bool proto_v1_seen;
+	bool proto_v2_seen;
+	bool proto_reported;
+	bool proto_conflict_reported;
+
 	/* AgileX protocol v2 decoding, off unless asked for: on a bus that is not
 	 * an AgileX vehicle, these ids mean something else entirely and named
 	 * fields would be confident nonsense. */
@@ -150,9 +170,51 @@ static void discover_note(uint32_t id)
 	       id, g.nseen);
 }
 
+/* The vendor's discriminators, and nothing else. Reporting once keeps this to a
+ * single line in the log whatever the frame rate is. */
+static void proto_note(uint32_t id)
+{
+	if (id == 0x151)
+		g.proto_v1_seen = true;
+	else if (id == 0x221 || id == 0x241)
+		g.proto_v2_seen = true;
+	else
+		return;
+
+	/* Both markers on one bus is the vendor's UNKNOWN case. Worth its own
+	 * line, because it means the assumption behind either answer is broken
+	 * and not that the bus is somehow both generations. */
+	if (g.proto_v1_seen && g.proto_v2_seen) {
+		if (!g.proto_conflict_reported) {
+			g.proto_conflict_reported = true;
+			logmsg(LOG_ERR,
+			       "both AgileX protocol markers seen (0x151 and "
+			       "0x221/0x241). ugv_sdk calls this UNKNOWN. Do not "
+			       "enable inject until this is understood.");
+		}
+		return;
+	}
+
+	if (g.proto_reported)
+		return;
+	g.proto_reported = true;
+
+	if (g.proto_v1_seen)
+		logmsg(LOG_WARNING,
+		       "AgileX protocol v1 detected (0x151). agilex.c implements "
+		       "v2, so its decode and its motion encoder do not apply to "
+		       "this vehicle. Do not enable inject.");
+	else
+		logmsg(LOG_NOTICE,
+		       "AgileX protocol v2 detected (0x%03X), which is what "
+		       "agilex.c implements.", id);
+}
+
 static void track_update(const struct can_frame *f)
 {
 	struct tracked *t;
+
+	proto_note(f->can_id & CAN_EFF_MASK);
 
 	if (g.discover)
 		discover_note(f->can_id & CAN_EFF_MASK);
@@ -191,6 +253,13 @@ static void status_write(void)
 	fprintf(fp, "\t\"injected\": %llu,\n", (unsigned long long)g.injected);
 	fprintf(fp, "\t\"rejected\": %llu,\n", (unsigned long long)g.rejected);
 	fprintf(fp, "\t\"dropped\": %llu,\n", (unsigned long long)g.dropped);
+	/* Detected generation, by the vendor's own discriminators. "unknown"
+	 * covers both "nothing heard yet" and the conflicting case, which the
+	 * log distinguishes; a consumer should treat either as do-not-command. */
+	fprintf(fp, "\t\"agilex_protocol\": \"%s\",\n",
+		(g.proto_v1_seen && g.proto_v2_seen) ? "unknown" :
+		g.proto_v1_seen ? "v1" :
+		g.proto_v2_seen ? "v2" : "unknown");
 	fprintf(fp, "\t\"inject_allowed\": %s,\n",
 		g.allow_inject ? "true" : "false");
 	fprintf(fp, "\t\"frames\": {");

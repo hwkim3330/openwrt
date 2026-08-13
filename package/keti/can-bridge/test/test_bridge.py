@@ -172,6 +172,10 @@ def run(allow_inject):
         else:
             check("injected counted", st["injected"], 1)
         check("rx counted", st["rx"] >= 9, True)
+        # None of the frames above is a generation marker, so the bridge must
+        # say it does not know rather than pick one. A default of "v2" here
+        # would be the same mistake as assuming the vehicle matches agilex.c.
+        check("protocol not guessed", st["agilex_protocol"], "unknown")
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -191,8 +195,45 @@ except OSError as e:
           f"sudo ip link add dev {IFACE} type vcan && sudo ip link set up {IFACE}")
     sys.exit(2)
 
+def run_protocol_detection():
+    """The generation markers, exactly as ugv_sdk defines them.
+
+    src/utilities/protocol_detector.cpp treats 0x151 as unique to v1 and
+    0x221/0x241 as unique to v2, and calls it UNKNOWN when both appear. This
+    matters more than it looks: agilex.c implements v2, and the vendor's own
+    Scout Mini Omni demo detects at runtime instead of assuming, so a v1
+    vehicle is a real possibility rather than a hypothetical one.
+    """
+    print("\n  protocol generation detection")
+    for desc, ids, want in (
+        ("0x151 alone is v1", [0x151], "v1"),
+        ("0x221 alone is v2", [0x221], "v2"),
+        ("0x241 alone is v2", [0x241], "v2"),
+        ("both markers is unknown", [0x151, 0x221], "unknown"),
+        ("an unrelated id decides nothing", [0x300], "unknown"),
+    ):
+        status = tempfile.mkstemp(suffix=".json")[1]
+        bus = can_socket(IFACE)
+        proc = start(False, status)
+        try:
+            for cid in ids:
+                send_frame(bus, cid, bytes(8))
+                time.sleep(0.25)
+            time.sleep(0.3)
+            proc.terminate()
+            proc.wait(timeout=3)
+            check(desc, json.load(open(status))["agilex_protocol"], want)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            bus.close()
+            if os.path.exists(status):
+                os.remove(status)
+
+
 run(False)
 run(True)
+run_protocol_detection()
 
 print()
 if fails:

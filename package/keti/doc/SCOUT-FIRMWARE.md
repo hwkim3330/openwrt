@@ -1,24 +1,68 @@
 # What is inside the SCOUT's controller
 
-Static analysis only. Nothing here was flashed, and nothing should be until the
-generation question below is settled.
+Static analysis only. Nothing here was flashed.
 
-## Where the firmware is
+## Read this part first: the archive does not contain firmware for this vehicle
 
-The address the older SCOUT MINI documents point at,
-`github.com/agilexrobotics/agilex_firmware`, is **404**. A copy survives at
-[`westonrobot/agilex_firmware`](https://github.com/westonrobot/agilex_firmware)
-(38 MB, last pushed 2020-09-02) with `firmware_bin_files/scout/bin_files/`
-holding twenty `.bin` files across v1.2, v1.3, 1.3.2, 1.3.3 and v1.4, plus a
-Windows Qt flashing tool (`FirmwareUpgradeV1.47`) and a CP210x driver bundle.
+The vehicle is a **SCOUT MINI Omni**. The archive's twenty `.bin` files are for
+**SCOUT**.
 
-That last detail is useful on its own: the vehicle's serial port goes through a
-**Silicon Labs CP210x** USB-UART bridge, which is what to expect when reading
-version information over the internal DB9.
+`github.com/agilexrobotics/agilex_firmware` is 404; the surviving copy is
+[`westonrobot/agilex_firmware`](https://github.com/westonrobot/agilex_firmware).
+Its top-level README advertises three products:
 
-## The container
+> + HUNTER
+> + SCOUT MINI
+> + SCOUT 1.0
+> + SCOUT 2.0
 
-Each `.bin` starts with its own version string and CRLF, then the firmware:
+What is actually in the tree is not that:
+
+| path | contents |
+|---|---|
+| `firmware_bin_files/scout/` | `README.md` + `bin_files/` with **20 images** |
+| `firmware_bin_files/hunter/` | `README.md` only, **no images** |
+| anything matching `mini` | **nothing**, in any path, on any branch |
+
+`git ls-tree -r --all` returns zero paths matching `mini`. The SCOUT MINI is
+named in the README and then never appears again.
+
+So the question is not "which version is safe to flash" but "these are not for
+this machine". Flashing a SCOUT image onto a SCOUT MINI Omni means a different
+chassis, different motors and different kinematics — the Omni has lateral motion,
+which the vehicle these images were built for does not have at all.
+
+**Nothing in this archive should be written to the vehicle.**
+
+## The compatibility notes, which are about SCOUT
+
+Worth recording accurately, because these are the notes that prompted the
+caution in the first place, and they describe a different product. From
+`firmware_bin_files/scout/README.md`, translated:
+
+- The only differences between batches are the **remote control**, the **motor
+  reduction gearing**, **light control** and the **cooling system**; the core is
+  unchanged.
+- Adapt by reference to **the version currently in use**. The things to weigh are
+  remote compatibility and the gear ratio difference.
+- Three remotes have shipped across the iterations: **DJI-RM, DJI-DT7,
+  FS-i6s**.
+- Early versions used a **1:32** reduction; later motors changed to **1:30**.
+- Early versions **cannot** do light control — the hardware does not support it.
+  Later ones can.
+- The cooling system needs hardware support; check whether the version
+  previously in use supported it.
+
+That last piece of advice is the useful one and it removes the need for most of
+what follows: the vendor's own instruction is to read the version the vehicle is
+running and stay on that lineage.
+
+## The chip
+
+From the vector tables and the peripheral addresses these images reference. This
+part is sound and is about the SCOUT controller.
+
+Each `.bin` starts with its version string and CRLF, then the image:
 
 ```
 0000  76 31 2e 34 2d 30 2d 67 37 36 30 33 38 62 65 20   v1.4-0-g76038be
@@ -26,70 +70,103 @@ Each `.bin` starts with its own version string and CRLF, then the firmware:
           └─ vector table starts at 0x12
 ```
 
-## The chip
-
-From the vector table and the peripheral addresses the code references:
-
 | | |
 |---|---|
 | Core | Cortex-M, initial SP in SRAM at `0x2000xxxx` |
 | Family | **STM32F4** (or F2) — GPIOA/B/C at `0x40020000/0400/0800` on AHB1, RCC at `0x40023800`, DMA1/2 at `0x40026000/6400`, ADC1 at `0x40012000`. An F1 would put GPIO at `0x40010800` and RCC at `0x40021000` |
-| Application base | linked to run at `0x08020000`, so there is a **bootloader in the first 128 KiB** and the utility replaces only the application |
+| Application base | linked at `0x08020000`, so there is a **bootloader in the first 128 KiB** and the utility replaces only the application |
 | CAN | **both bxCAN1 (`0x40006400`) and bxCAN2 (`0x40006800`)** — two buses, which fits an external user bus plus an internal motor bus |
-| Serial | USART1, USART2 and USART3 all referenced |
-| Timers | TIM1 and TIM2 |
+| Serial | USART1, USART2, USART3 |
+| Timers | TIM1, TIM2 |
 
-## The same chip across every version
+The same part across every version:
 
-| file | reset vector | vector entries | CAN1 refs | CAN2 refs |
-|---|---|---|---|---|
-| v1.2-8-g5b23807 | `0x080236A9` | 97 | 5 | 11 |
-| v1.3-0-g431e8f0 | `0x080236A9` | 97 | 5 | 10 |
-| 1.3.2-0-ge201c35 | `0x080236A9` | 97 | 3 | 4 |
-| v1.3.3-1-g3a7ed85 | `0x080236A9` | 97 | 3 | 4 |
-| v1.4-0-g76038be | `0x080236A9` | 97 | 3 | 4 |
+| file | reset vector | vector entries |
+|---|---|---|
+| v1.2-8-g5b23807 | `0x080236A9` | 97 |
+| v1.3-0-g431e8f0 | `0x080236A9` | 97 |
+| 1.3.2-0-ge201c35 | `0x080236A9` | 97 |
+| v1.3.3-1-g3a7ed85 | `0x080236A9` | 97 |
+| v1.4-0-g76038be | `0x080236A9` | 97 |
 
-Identical entry point and identical interrupt count in all of them. The stack
-pointer differs between builds, which is RAM usage rather than a different part.
+Identical entry point and interrupt count throughout. The differing stack
+pointer is RAM usage, not a different chip.
 
-**So the compatibility warnings are not about hardware.** The differences the
-documentation describes — DJI versus FS-i6S remote, 1:32 versus 1:30 gear ratio —
-are configuration compiled into the same binary for the same MCU. Two things
-follow:
+The archive also ships a **CP210x** driver bundle, so the vehicle's serial port
+goes through a Silicon Labs USB-UART bridge. That is the port to read a version
+from.
 
-- Flashing the wrong version is unlikely to brick the controller: same chip, same
-  bootloader, same layout.
-- It will change behaviour. A gear ratio compiled in wrong means every commanded
-  velocity is scaled wrong, and a vehicle that moves at the wrong speed is worse
-  than one that does not move.
+## Which protocol generation — settled, and it must be detected
 
-## Two code lineages
+`can-bridge/src/agilex.c` implements protocol **v2**. Whether that matches the
+vehicle is the one question that has to be answered before anything is
+commanded, and the vendor answers it twice over.
 
-`v1.2`/`v1.3` reference CAN2 ten or eleven times; `1.3.2` onward reference it
-four. The constant `32` appears sixteen or seventeen times in the first group and
-nine in the second. Something about the CAN handling was reworked between them,
-and that is the most likely place the generation split lives.
+**The Scout Mini Omni can be either generation.** `ugv_sdk`'s own
+`sample/scout_demo/scout_mini_omni_demo.cpp` constructs
+`ScoutMiniOmniRobot(ProtocolVersion::AGX_V1)` or `AGX_V2` according to a runtime
+`ProtocolDetector`. The vendor does not assume, for this exact model, so neither
+should we.
 
-The gear ratio itself was **not** identified. `30` does not appear as a 32-bit
-integer in any of the twenty files and `32` appears too often to attribute - it is
-a normal buffer size. Whatever encodes the ratio is not a plain literal.
+**The discriminators are exact.** From `src/utilities/protocol_detector.cpp`:
 
-## What to do before flashing anything
+| heard on the bus | verdict |
+|---|---|
+| `0x151` — state feedback | **v1** ("unique to V1 protocol") |
+| `0x221` or `0x241` — motion state, rc state | **v2** ("unique to V2 protocol") |
+| both | **UNKNOWN** — the detector refuses to choose |
+| neither, within the timeout | **UNKNOWN** |
 
-The protocol generation matters more than the firmware version, because
-`can-bridge/src/agilex.c` implements **protocol v2**. If this vehicle speaks v1,
-both the decoder and `agx_encode_motion()` are talking to the wrong protocol.
+Detection is entirely passive: the detector installs a receive callback and puts
+nothing on the bus.
 
-That is answerable without writing to the vehicle at all:
+`can-bridge` now implements exactly this, always, not only under `--discover`.
+It logs one line when the generation is first settled, warns rather than informs
+when the answer is v1, logs the conflicting case separately, and publishes
+`"agilex_protocol": "v1" | "v2" | "unknown"` in its status JSON. `unknown` covers
+both "nothing heard yet" and the conflict, and a consumer should treat either as
+do-not-command. `test/test_bridge.py` covers all five cases, including that a bus
+carrying only `0x251`/`0x252` still reports `unknown` — the bridge must not
+default to the generation its decoder happens to implement.
 
-```sh
-can-bridge --interface can0 --discover      # read-only; logs every distinct id
-```
+An earlier version of this document said "ids around `0x211`, `0x221`, `0x251…` →
+v2". That was imprecise: `0x211` and `0x251` are not discriminators, and the
+positive marker for v1 is `0x151`, which was not mentioned at all.
 
-- ids around `0x211`, `0x221`, `0x251…` → protocol v2, and the existing code fits
-- a different id range → protocol v1, and the decoder and encoder need writing
-  for that generation
+## Two methods that did not work, so they are not repeated
 
-`--allow-inject` is off by default, so nothing reaches the bus. Do this first,
-read the version over the CP210x serial port second, and only then consider
-whether any firmware needs replacing at all.
+**Searching the images for CAN ids as byte patterns.** Each 11-bit id was tried
+raw, as `<< 21` (bxCAN's `CAN_TIxR` field position) and as `<< 5`. The result
+looked decisive and was noise: the strongest "v1" evidence was `0x200 << 21`,
+which is `0x40000000` — the peripheral base region, present in any STM32 image
+many times over. Do not score a firmware this way.
+
+**Searching for the gear ratio as a constant.** The ratio is not there as
+`30`/`32` in any width, nor as the floats 32.0, 30.0, 1/32, 1/30, or those times
+60. A stronger test also failed: enumerate every 4-byte aligned word, keep those
+present in some images and absent from others, and keep the ones whose presence
+splits the set contiguously in version order. **1792 words** pass that filter, and
+the top candidates are `0x48xx` half-words — Thumb-2 `ldr rN, [pc, #imm]` — so
+they are code motion between recompiles, not data. Twenty separate builds differ
+everywhere; a partition carries no information.
+
+Recovering the ratio would need actual disassembly of the velocity path. It is
+not worth it, because the vendor's advice makes it unnecessary.
+
+## What to do
+
+In order, and none of it involves writing to the vehicle:
+
+1. **Get a USB-CAN adapter.** Nothing below is possible without one, and it is
+   the cheapest unblocking purchase in the project.
+2. **Listen.** `can-bridge --interface can0 --discover` with `allow_inject` off,
+   which is the default. Read `agilex_protocol` from the status file. If it says
+   `v1`, `agilex.c` and `agx_encode_motion()` do not apply to this vehicle and
+   writing them onto the bus would be commanding it in a language it does not
+   speak.
+3. **Read the version** over the CP210x serial port. That, plus the SCOUT README's
+   "adapt by reference to the version currently in use", is the whole of the
+   firmware question.
+4. **Do not flash anything from this archive.** It has no SCOUT MINI images. If
+   the vehicle ever does need firmware, it has to come from a source that names
+   the SCOUT MINI.
