@@ -48,10 +48,26 @@ Checked by `git ls-remote`, so these are existence facts rather than guesses:
 | `westonrobot/agilex_firmware` | **exists** — the SCOUT archive analysed here |
 | `agilexrobotics/scout_ros2` | exists, but a ROS 2 driver, not firmware |
 
-So there is no public SCOUT MINI firmware under any obvious name. If the vehicle
-ever needs one it has to come from AgileX directly, and the version currently
-running has to be read off the vehicle first regardless - which is the vendor's
-own advice and needs only the CP210x serial port.
+Searching more widely than guessed names finds more copies of the same thing and
+no new products. `agilexrobotics` is a user account rather than an organisation,
+94 repositories, none of them firmware. `westonrobot` has 90, of which two carry
+binaries:
+
+| | |
+|---|---|
+| `westonrobot/agilex_firmware` | the 20 SCOUT images analysed here |
+| `westonrobot/firmware_upgrade` | one more SCOUT image, `scout-v1.4-12-0-g070a72.bin` |
+| `liweikeai2002/agilex_firmware` | an independent copy, not a fork, pushed 2019 — same 20 SCOUT images, no MINI |
+| `agilexrobotics/scout_mini_omni_ros` | this exact vehicle, but a ROS package: no firmware in it |
+
+Three independent copies of the archive, and every one of them is SCOUT only.
+
+**There is no public SCOUT MINI firmware.** Getting one means asking AgileX or
+Weston Robot for it, with the vehicle's serial number and the version it is
+currently running — and that version has to be read off the vehicle over the
+CP210x port either way, which is also the vendor's own advice about which
+firmware to use. So the serial port comes first whatever the answer turns out to
+be.
 
 ## The compatibility notes, which are about SCOUT
 
