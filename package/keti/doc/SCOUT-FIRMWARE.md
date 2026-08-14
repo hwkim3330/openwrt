@@ -34,6 +34,25 @@ which the vehicle these images were built for does not have at all.
 
 **Nothing in this archive should be written to the vehicle.**
 
+### Where the SCOUT MINI firmware is not
+
+Checked by `git ls-remote`, so these are existence facts rather than guesses:
+
+| | |
+|---|---|
+| `agilexrobotics/agilex_firmware` | gone (the 404 that started this) |
+| `agilexrobotics/scout_mini` | does not exist |
+| `agilexrobotics/SCOUT_MINI` | does not exist |
+| `agilexrobotics/ugv_firmware` | does not exist |
+| `westonrobot/scout_mini_firmware` | does not exist |
+| `westonrobot/agilex_firmware` | **exists** — the SCOUT archive analysed here |
+| `agilexrobotics/scout_ros2` | exists, but a ROS 2 driver, not firmware |
+
+So there is no public SCOUT MINI firmware under any obvious name. If the vehicle
+ever needs one it has to come from AgileX directly, and the version currently
+running has to be read off the vehicle first regardless - which is the vendor's
+own advice and needs only the CP210x serial port.
+
 ## The compatibility notes, which are about SCOUT
 
 Worth recording accurately, because these are the notes that prompted the
