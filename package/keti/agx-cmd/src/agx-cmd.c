@@ -70,6 +70,8 @@
 #define BCAN_HDR	8
 #define BCAN_REC	16
 
+enum { PROTO_AUTO, PROTO_V1, PROTO_V2 };
+
 static struct {
 	int listen_port;		/* where teleop's TELE frames arrive */
 	struct sockaddr_in inject_to;	/* can-bridge --listen */
@@ -88,6 +90,27 @@ static struct {
 	const char *status_path;
 	bool foreground;
 	bool enabled;
+
+	/*
+	 * Which protocol generation to speak.
+	 *
+	 * This daemon only transmits, so it cannot detect anything itself - it
+	 * would have to put a frame on the bus to find out, which is exactly what
+	 * must not happen before the generation is known. can-bridge is already
+	 * listening and already writes what it heard, so the answer is read from
+	 * there rather than guessed or configured.
+	 *
+	 * AUTO with an unreadable or undecided bridge status sends nothing at all.
+	 * The alternative - defaulting to a generation - means the first command
+	 * to a vehicle of the other kind is either a checksum-less frame a v1
+	 * vehicle ignores, or a v2-shaped frame whose bytes a v1 vehicle reads as
+	 * percentages of its 3 m/s maximum. One of those two mistakes drives away.
+	 */
+	int proto;			/* PROTO_AUTO until settled, then V1 or V2 */
+	const char *bridge_status;
+	uint64_t proto_unknown_skips;
+	bool proto_said;
+	uint8_t v1_count;		/* v1's rolling frame counter */
 
 	/* live state */
 	double cur_lin, cur_lat, cur_ang;
@@ -137,22 +160,110 @@ static void wr32(uint8_t *p, uint32_t v)
 	p[3] = (uint8_t)((v >> 24) & 0xff);
 }
 
-/* One 0x111 frame wrapped in can-bridge's inject datagram. */
+/*
+ * Read the generation can-bridge heard.
+ *
+ * A substring search, not a JSON parse. The field is written by one printf in
+ * can-bridge.c with a fixed shape, both files are in this tree, and the test
+ * pins the shape - so a parser would be more code for the same guarantee. If
+ * the string ever changes the match fails, which stops commands rather than
+ * sending the wrong ones.
+ */
+static int read_bridge_proto(void)
+{
+	char buf[4096];
+	FILE *fp;
+	size_t n;
+
+	if (!g.bridge_status)
+		return PROTO_AUTO;
+	fp = fopen(g.bridge_status, "r");
+	if (!fp)
+		return PROTO_AUTO;
+	n = fread(buf, 1, sizeof(buf) - 1, fp);
+	fclose(fp);
+	buf[n] = '\0';
+
+	if (strstr(buf, "\"agilex_protocol\": \"v1\""))
+		return PROTO_V1;
+	if (strstr(buf, "\"agilex_protocol\": \"v2\""))
+		return PROTO_V2;
+	return PROTO_AUTO;
+}
+
+/*
+ * Settle the generation, once.
+ *
+ * Re-read while unknown, then stop: a bus does not change generation while the
+ * daemon runs, and a value that could flip mid-drive would change what every
+ * subsequent command byte means.
+ */
+static void resolve_proto(void)
+{
+	if (g.proto != PROTO_AUTO)
+		return;
+	g.proto = read_bridge_proto();
+	if (g.proto == PROTO_AUTO)
+		return;
+	logmsg(LOG_NOTICE, "protocol %s, from %s",
+	       g.proto == PROTO_V1 ? "v1" : "v2", g.bridge_status);
+}
+
+/* One motion command wrapped in can-bridge's inject datagram. */
 static void emit(int sock)
 {
 	uint8_t pkt[BCAN_HDR + BCAN_REC];
 	uint8_t payload[8];
+	uint32_t id;
 
 	if (!g.have_inject || sock < 0)
 		return;
 
-	agx_encode_motion(payload, g.cur_lin, g.cur_ang, g.cur_lat);
+	resolve_proto();
+	if (g.proto == PROTO_AUTO) {
+		g.proto_unknown_skips++;
+		if (!g.proto_said) {
+			g.proto_said = true;
+			/*
+			 * Detection in can-bridge is not gated on --agilex; that
+			 * flag only enables decoding. So this state means one of:
+			 * can-bridge is not running, its --status path is not the
+			 * one being read here, or the vehicle is not powered and
+			 * no discriminator frame has arrived.
+			 */
+			logmsg(LOG_WARNING,
+			       "not commanding: nothing in %s says which AgileX "
+			       "generation this bus is. Check can-bridge is running "
+			       "and writing there, and that the vehicle is on. Pass "
+			       "--protocol v1|v2 to override.",
+			       g.bridge_status ? g.bridge_status : "(no status path)");
+		}
+		return;
+	}
+
+	if (g.proto == PROTO_V1) {
+		/*
+		 * v1 wants a fraction of the vehicle's maximum, so the divisors
+		 * are the vehicle's - AGX1_MINI_MAX_*, not this daemon's own
+		 * --max-linear. Those two are different things: the -L defaults
+		 * are walking pace and already applied to cur_lin above, and
+		 * dividing by them here would turn walking pace back into full
+		 * speed.
+		 */
+		id = AGX1_ID_MOTION_CMD;
+		agx1_encode_motion(payload, g.cur_lin, g.cur_ang, g.cur_lat,
+				   AGX1_MINI_MAX_LINEAR, AGX1_MINI_MAX_ANGULAR,
+				   AGX1_MINI_MAX_LATERAL, g.v1_count++);
+	} else {
+		id = AGX_ID_MOTION_CMD;
+		agx_encode_motion(payload, g.cur_lin, g.cur_ang, g.cur_lat);
+	}
 
 	memset(pkt, 0, sizeof(pkt));
 	wr32(pkt, BCAN_MAGIC);
 	pkt[4] = BCAN_VERSION;
 	pkt[5] = 1;				/* one frame in this batch */
-	wr32(pkt + BCAN_HDR, AGX_ID_MOTION_CMD);
+	wr32(pkt + BCAN_HDR, id);
 	pkt[BCAN_HDR + 4] = 8;			/* dlc */
 	memcpy(pkt + BCAN_HDR + 8, payload, 8);
 
@@ -275,6 +386,18 @@ static void status_write(void)
 		g.max_linear, g.max_lateral, g.max_angular, g.accel);
 	fprintf(f, "\t\"lateral_invert\": %s,\n",
 		g.lateral_invert ? "true" : "false");
+	/*
+	 * Which generation is going on the wire, and how many commands were
+	 * withheld because nobody had said yet. A rising skip count with a
+	 * connected operator is the one failure this design introduces, so it is
+	 * worth being able to see it rather than wondering why the vehicle is
+	 * still.
+	 */
+	fprintf(f, "\t\"protocol\": \"%s\",\n",
+		g.proto == PROTO_V1 ? "v1" :
+		g.proto == PROTO_V2 ? "v2" : "unknown");
+	fprintf(f, "\t\"protocol_skips\": %llu,\n",
+		(unsigned long long)g.proto_unknown_skips);
 	fprintf(f, "\t\"rx\": %llu,\n", (unsigned long long)g.rx);
 	fprintf(f, "\t\"applied\": %llu,\n", (unsigned long long)g.applied);
 	fprintf(f, "\t\"rejected_seq\": %llu,\n",
@@ -313,7 +436,7 @@ static void usage(const char *me)
 "them to can-bridge's inject port. Does not open a CAN socket; can-bridge still\n"
 "has to be running with --allow-inject for anything to reach the bus.\n"
 "\n"
-"  -l, --listen PORT        where TELE frames arrive (default 7602)\n"
+"  -l, --listen PORT        where TELE frames arrive (default 7722)\n"
 "  -i, --inject HOST:PORT   can-bridge --listen (no default; required to emit)\n"
 "  -L, --max-linear MPS     speed at full stick (default 0.5)\n"
 "  -X, --max-lateral MPS    strafe speed at full stick (default 0.5)\n"
@@ -325,12 +448,17 @@ static void usage(const char *me)
 "  -t, --deadman MS         neutral and stop after this long without a frame\n"
 "                           (default 300)\n"
 "  -z, --zero-frames N      explicit zero commands after a loss (default 10)\n"
+"      --protocol WHICH     auto|v1|v2 (default auto: read what can-bridge\n"
+"                           heard. Neither generation is assumed - if the\n"
+"                           bus has not said, nothing is commanded)\n"
+"      --bridge-status PATH can-bridge's status json, for auto\n"
+"                           (default /var/run/can-bridge.json)\n"
 "  -S, --status PATH        write a status json here\n"
 "  -f, --foreground         log to stderr\n"
 "  -h, --help\n", me);
 }
 
-enum { OPT_LATERAL_INVERT = 1000 };
+enum { OPT_LATERAL_INVERT = 1000, OPT_PROTOCOL, OPT_BRIDGE_STATUS };
 
 int main(int argc, char **argv)
 {
@@ -342,6 +470,8 @@ int main(int argc, char **argv)
 		{ "max-angular",    required_argument, NULL, 'A' },
 		{ "accel",          required_argument, NULL, 'a' },
 		{ "lateral-invert", no_argument,       NULL, OPT_LATERAL_INVERT },
+		{ "protocol",       required_argument, NULL, OPT_PROTOCOL },
+		{ "bridge-status",  required_argument, NULL, OPT_BRIDGE_STATUS },
 		{ "rate",           required_argument, NULL, 'H' },
 		{ "deadman",        required_argument, NULL, 't' },
 		{ "zero-frames",    required_argument, NULL, 'z' },
@@ -364,6 +494,8 @@ int main(int argc, char **argv)
 	g.rate_hz = 20;
 	g.deadman_ms = 300;
 	g.zero_frames = 10;
+	g.proto = PROTO_AUTO;
+	g.bridge_status = "/var/run/can-bridge.json";
 
 	while ((c = getopt_long(argc, argv, "l:i:L:X:A:a:H:t:z:S:fh",
 			        opts, NULL)) != -1) {
@@ -384,6 +516,19 @@ int main(int argc, char **argv)
 		case 'H': g.rate_hz = atoi(optarg); break;
 		case 't': g.deadman_ms = atoi(optarg); break;
 		case 'z': g.zero_frames = atoi(optarg); break;
+		case OPT_PROTOCOL:
+			if (!strcmp(optarg, "v1")) {
+				g.proto = PROTO_V1;
+			} else if (!strcmp(optarg, "v2")) {
+				g.proto = PROTO_V2;
+			} else if (!strcmp(optarg, "auto")) {
+				g.proto = PROTO_AUTO;
+			} else {
+				fprintf(stderr, "--protocol takes auto, v1 or v2\n");
+				return 2;
+			}
+			break;
+		case OPT_BRIDGE_STATUS: g.bridge_status = optarg; break;
 		case 'S': g.status_path = optarg; break;
 		case 'f': g.foreground = true; break;
 		case 'h': usage(argv[0]); return 0;

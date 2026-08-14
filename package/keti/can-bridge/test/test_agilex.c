@@ -278,6 +278,98 @@ int main(void)
 		eqd("small command survives rounding", s.linear_mps, 0.001);
 	}
 
+	/* ---------------------------------------------- protocol v1 ---- */
+	/*
+	 * A different protocol, not a dialect. Percentages instead of mm/s, a
+	 * checksum the vehicle enforces, a rolling counter, and identifiers that
+	 * collide with v2 while meaning something else - 0x131 is a brake command
+	 * in v2 and the motion state in v1, which is why there are two decoders
+	 * and not one. The values below are computed by hand from ugv_sdk's
+	 * agilex_msg_parser_v1.c rather than captured, so this fails if either
+	 * side drifts.
+	 */
+	{
+		uint8_t f[8];
+		struct agx_state s1;
+		uint8_t sum;
+
+		memset(f, 0, sizeof(f));
+		f[0] = 0x01; f[2] = 50; f[6] = 7;
+		sum = (uint8_t)(0x30 + 0x01 + 8 + 0x01 + 50 + 7);
+		eqi("v1 checksum matches the vendor formula",
+		    agx1_checksum(0x130, f, 8), sum);
+
+		/* Half of a 1.5 m/s maximum is 50 percent. */
+		agx1_encode_motion(f, 0.75, 0.0, 0.0, 1.5, 1.5, 1.0, 7);
+		eqi("v1 commands CAN control mode", f[0], AGX1_CTRL_MODE_CAN);
+		eqi("v1 clears no errors", f[1], AGX1_ERROR_CLR_NONE);
+		eqi("v1 linear is a percentage", (int8_t)f[2], 50);
+		eqi("v1 angular zero stays zero", (int8_t)f[3], 0);
+		eqi("v1 passes the rolling count through", f[6], 7);
+		eqi("v1 fills in its own checksum",
+		    f[7], agx1_checksum(AGX1_ID_MOTION_CMD, f, 8));
+
+		agx1_encode_motion(f, -9.0, 0.0, 0.0, 1.5, 1.5, 1.0, 0);
+		eqi("v1 saturates at -100", (int8_t)f[2], -100);
+		agx1_encode_motion(f, 9.0, 0.0, 0.0, 1.5, 1.5, 1.0, 0);
+		eqi("v1 saturates at +100", (int8_t)f[2], 100);
+
+		/*
+		 * A zero maximum is the configuration mistake that would divide by
+		 * zero and send whatever the result rounded to. Commanding nothing
+		 * is the only safe reading of "no known maximum".
+		 */
+		agx1_encode_motion(f, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0);
+		eqi("v1 with no known maximum commands zero", (int8_t)f[2], 0);
+		eqi("v1 with no known maximum does not turn", (int8_t)f[3], 0);
+
+		/* Motion state: big-endian thousandths, unlike the command. */
+		memset(&s1, 0, sizeof(s1));
+		memset(f, 0, sizeof(f));
+		f[0] = 0x03; f[1] = 0xE8;	/* +1000 -> 1.000 m/s */
+		f[2] = 0xFF; f[3] = 0x9C;	/*  -100 -> -0.100 rad/s */
+		f[4] = 0x00; f[5] = 0xC8;	/*  +200 -> 0.200 m/s sideways */
+		f[7] = agx1_checksum(AGX1_ID_MOTION_STATE, f, 8);
+		ok("v1 motion state decodes",
+		   agx1_decode(&s1, AGX1_ID_MOTION_STATE, f, 8));
+		eqd("v1 linear", s1.linear_mps, 1.0);
+		eqd("v1 angular", s1.angular_rps, -0.1);
+		eqd("v1 lateral", s1.lateral_mps, 0.2);
+		ok("v1 sideways motion means mecanum wheels", s1.lateral_seen);
+		ok("v1 marks the motion state valid", s1.motion_valid);
+
+		/* The checksum is the whole reason to trust a frame with no CRC. */
+		f[7] ^= 0xFF;
+		ok("v1 refuses a bad checksum",
+		   !agx1_decode(&s1, AGX1_ID_MOTION_STATE, f, 8));
+		eqi("v1 counts a corrupt frame rather than dropping it",
+		    s1.unknown, 1);
+		ok("v1 keeps the last good state after a corrupt frame",
+		   s1.motion_valid);
+
+		memset(&s1, 0, sizeof(s1));
+		memset(f, 0, sizeof(f));
+		f[1] = 0x01;
+		f[2] = 0x00; f[3] = 0xF6;	/* 246 -> 24.6 V */
+		f[4] = 0x00; f[5] = 0x10;
+		f[7] = agx1_checksum(AGX1_ID_SYSTEM_STATE, f, 8);
+		ok("v1 system state decodes",
+		   agx1_decode(&s1, AGX1_ID_SYSTEM_STATE, f, 8));
+		eqd("v1 battery volts", s1.battery_v, 24.6);
+		eqi("v1 error code", s1.error_code, 0x0010);
+		eqi("v1 control mode", s1.control_mode, 0x01);
+
+		/*
+		 * v2's command identifier must not be read as v1 data. If this ever
+		 * passes, a v2 vehicle's own traffic would be decoded as v1 state.
+		 */
+		memset(&s1, 0, sizeof(s1));
+		ok("v1 does not claim v2's 0x111",
+		   !agx1_decode(&s1, AGX_ID_MOTION_CMD, f, 8));
+		eqi("v1 counts what it did not understand", s1.unknown, 1);
+		eqi("v1 decoded nothing from it", s1.decoded, 0);
+	}
+
 	printf("\n");
 	if (fails) {
 		printf("FAILED (%d)\n", fails);

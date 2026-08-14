@@ -83,10 +83,11 @@ static struct {
 	 * frames 0x221/0x241 only in v2, so hearing one of them settles it, and
 	 * hearing both means something is wrong rather than something is new.
 	 *
-	 * It matters because agilex.c implements v2. On a v1 vehicle both the
-	 * decoder and agx_encode_motion() would be addressing the wrong
-	 * generation, and the official demo for the Scout Mini Omni detects at
-	 * runtime rather than assuming - so this vehicle can be either.
+	 * It matters because the two generations reuse identifiers for unrelated
+	 * things - 0x131 is a brake command in v2 and the motion state in v1 - so
+	 * there is one decoder per generation and this picks which one runs. The
+	 * official demo for the Scout Mini Omni detects at runtime rather than
+	 * assuming, so this vehicle can be either and neither answer is hardcoded.
 	 *
 	 * Listening only. Detection never puts a frame on the bus.
 	 */
@@ -94,6 +95,7 @@ static struct {
 	bool proto_v2_seen;
 	bool proto_reported;
 	bool proto_conflict_reported;
+	uint64_t proto_undecided;	/* frames seen before the generation was */
 
 	/* AgileX protocol v2 decoding, off unless asked for: on a bus that is not
 	 * an AgileX vehicle, these ids mean something else entirely and named
@@ -200,14 +202,15 @@ static void proto_note(uint32_t id)
 	g.proto_reported = true;
 
 	if (g.proto_v1_seen)
-		logmsg(LOG_WARNING,
-		       "AgileX protocol v1 detected (0x151). agilex.c implements "
-		       "v2, so its decode and its motion encoder do not apply to "
-		       "this vehicle. Do not enable inject.");
+		logmsg(LOG_NOTICE,
+		       "AgileX protocol v1 detected (0x151). Decoding as v1: "
+		       "checksummed frames, and commands are percentages of the "
+		       "SCOUT MINI maxima rather than mm/s. agx-cmd must be told "
+		       "the same generation - it reads it from this status file.");
 	else
 		logmsg(LOG_NOTICE,
-		       "AgileX protocol v2 detected (0x%03X), which is what "
-		       "agilex.c implements.", id);
+		       "AgileX protocol v2 detected (0x%03X). Decoding as v2.",
+		       id);
 }
 
 static void track_update(const struct can_frame *f)
@@ -219,8 +222,26 @@ static void track_update(const struct can_frame *f)
 	if (g.discover)
 		discover_note(f->can_id & CAN_EFF_MASK);
 
-	if (g.agilex)
-		agx_decode(&g.agx, f->can_id & CAN_EFF_MASK, f->data, f->can_dlc);
+	/*
+	 * One decoder per generation, chosen by what the bus said.
+	 *
+	 * Nothing is decoded until the generation is known, which costs a handful
+	 * of frames: 0x151 (v1) and 0x221 (v2) are both periodic at 50 Hz, so the
+	 * wait is measured in tens of milliseconds. Guessing instead would be
+	 * worse than waiting - on a v1 bus the v2 decoder reads the motion state
+	 * as a brake command and reports velocities that were never sent, which
+	 * looks like data rather than like an error.
+	 */
+	if (g.agilex) {
+		uint32_t id = f->can_id & CAN_EFF_MASK;
+
+		if (g.proto_v1_seen && !g.proto_v2_seen)
+			agx1_decode(&g.agx, id, f->data, f->can_dlc);
+		else if (g.proto_v2_seen && !g.proto_v1_seen)
+			agx_decode(&g.agx, id, f->data, f->can_dlc);
+		else
+			g.proto_undecided++;
+	}
 
 	t = track_find(f->can_id & CAN_EFF_MASK);
 
@@ -260,6 +281,11 @@ static void status_write(void)
 		(g.proto_v1_seen && g.proto_v2_seen) ? "unknown" :
 		g.proto_v1_seen ? "v1" :
 		g.proto_v2_seen ? "v2" : "unknown");
+	/* How many frames went by before the generation was settled. A number
+	 * that keeps rising means no discriminator is arriving at all, which is a
+	 * different fault from a bus that is quiet. */
+	fprintf(fp, "\t\"agilex_undecided\": %llu,\n",
+		(unsigned long long)g.proto_undecided);
 	fprintf(fp, "\t\"inject_allowed\": %s,\n",
 		g.allow_inject ? "true" : "false");
 	fprintf(fp, "\t\"frames\": {");

@@ -68,7 +68,7 @@ def encode(frames):
     return pkt
 
 
-def start(allow_inject, status):
+def start(allow_inject, status, agilex=False):
     args = [BIN, "-f", "-i", IFACE,
             "-r", f"127.0.0.1:{UDP_PORT}",
             "-l", str(INJECT_PORT),
@@ -76,6 +76,8 @@ def start(allow_inject, status):
             "-S", status, "-I", "50"]
     if allow_inject:
         args.append("--allow-inject")
+    if agilex:
+        args.append("--agilex")
     p = subprocess.Popen(args, stderr=subprocess.PIPE, text=True)
     time.sleep(0.6)
     if p.poll() is not None:
@@ -231,9 +233,96 @@ def run_protocol_detection():
                 os.remove(status)
 
 
+def v1_checksum(can_id, data):
+    """The vendor's CalcCanFrameChecksumV1, written out again here rather than
+    imported, so a mistake in agilex.c cannot agree with itself."""
+    total = (can_id & 0xFF) + ((can_id >> 8) & 0xFF) + 8
+    for b in data[:7]:
+        total += b
+    return total & 0xFF
+
+
+def run_generation_decoding():
+    """Whether the decoder that runs is the one the bus asked for.
+
+    Detection alone is not enough. The two generations reuse identifiers for
+    unrelated things - 0x131 is a brake command in v2 and the motion state in
+    v1 - so the daemon has to hold off decoding until it knows, and then use the
+    matching decoder. Getting this wrong does not look like an error: the v2
+    decoder reads a v1 motion state as a brake command and publishes velocities
+    that were never sent.
+    """
+    print("\n  decoding follows the detected generation")
+
+    # --- v1: 0x151 settles it, then a checksummed 0x131 must decode ---
+    status = tempfile.mkstemp(suffix=".json")[1]
+    bus = can_socket(IFACE)
+    proc = start(False, status, agilex=True)
+    try:
+        sysframe = bytearray(8)
+        sysframe[1] = 0x01			# control mode
+        sysframe[2], sysframe[3] = 0x00, 0xF6	# 246 -> 24.6 V
+        sysframe[7] = v1_checksum(0x151, sysframe)
+        send_frame(bus, 0x151, bytes(sysframe))
+        time.sleep(0.3)
+
+        mot = bytearray(8)
+        mot[0], mot[1] = 0x03, 0xE8		# +1000 -> 1.000 m/s
+        mot[2], mot[3] = 0xFF, 0x9C		#  -100 -> -0.100 rad/s
+        mot[4], mot[5] = 0x00, 0xC8		#  +200 -> 0.200 m/s sideways
+        mot[7] = v1_checksum(0x131, mot)
+        send_frame(bus, 0x131, bytes(mot))
+        time.sleep(0.4)
+        proc.terminate()
+        proc.wait(timeout=3)
+        st = json.load(open(status))
+        a = st.get("agilex", {})
+        check("v1 detected from the bus", st["agilex_protocol"], "v1")
+        check("v1 battery decoded", a.get("battery_v"), 24.6)
+        check("v1 linear decoded", a.get("linear_mps"), 1.0)
+        check("v1 lateral decoded", a.get("lateral_mps"), 0.2)
+        # 0x131 under the v2 decoder is a brake command with no velocities, so
+        # a linear_mps at all is the proof that the v1 decoder ran.
+        check("v1 sideways motion identifies the mecanum base",
+              a.get("variant", "").startswith("omni"), True)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        bus.close()
+        if os.path.exists(status):
+            os.remove(status)
+
+    # --- nothing is decoded before the generation is known ---
+    #
+    # 0x131 arrives on both generations, so it is exactly the frame that must
+    # not be decoded on a guess. It should be counted as undecided instead.
+    status = tempfile.mkstemp(suffix=".json")[1]
+    bus = can_socket(IFACE)
+    proc = start(False, status, agilex=True)
+    try:
+        for _ in range(4):
+            send_frame(bus, 0x131, bytes(8))
+            time.sleep(0.15)
+        time.sleep(0.4)
+        proc.terminate()
+        proc.wait(timeout=3)
+        st = json.load(open(status))
+        check("an ambiguous id decides nothing", st["agilex_protocol"], "unknown")
+        check("and is counted as undecided rather than decoded",
+              st.get("agilex_undecided", 0) > 0, True)
+        check("nothing was decoded", st.get("agilex", {}).get("decoded"), 0)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        bus.close()
+        if os.path.exists(status):
+            os.remove(status)
+
+
 run(False)
 run(True)
 run_protocol_detection()
+run_generation_decoding()
 
 print()
 if fails:

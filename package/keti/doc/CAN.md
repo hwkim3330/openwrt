@@ -96,6 +96,9 @@ motion feedback, and it is not. Motion state is **`0x221`**; `0x251` is the firs
 actuator's high-speed state. Both carry plausible small numbers, so the mix-up
 survives a glance at a dashboard.
 
+These are the **protocol v2** ids. v1 uses a different set; see below for how the
+daemon decides which it is looking at.
+
 | id | meaning |
 |---|---|
 | `0x211` | system state: vehicle state, control mode, battery (0.1 V), error bitmap |
@@ -134,6 +137,59 @@ The vehicle on this bench is the **Omni** — mecanum wheels, so it translates
 sideways and diagonally. That is why the teleop path carries three axes rather
 than two: see `TELEOP.md`. The inference stays in anyway, because it is the check
 that the bus agrees with that assumption.
+
+### Which generation - and why it is not a detail
+
+The Scout Mini Omni ships in **two protocol generations**, and `ugv_sdk` itself
+decides at runtime (`src/utilities/protocol_detector.cpp`) rather than assuming.
+They are not dialects of one protocol:
+
+| | v2 | v1 |
+|---|---|---|
+| motion command | `0x111` | `0x130` |
+| units | mm/s, mrad/s as big-endian int16 | signed **percentage** of the vehicle's maximum |
+| integrity | none | checksum byte the vehicle enforces |
+| sequencing | none | rolling `count` byte |
+| resolution | 1 mm/s | 1% of 3.0 m/s = **30 mm/s** |
+| motion state | `0x221` | `0x131` |
+| system state | `0x211` | `0x151` |
+
+Note that `0x131` is a *brake command* in v2 and the *motion state* in v1. That
+overlap is why there are two decoders (`agx_decode` and `agx1_decode`) and why
+`can-bridge` decodes nothing until it knows which one applies: on a v1 bus the v2
+decoder reads the motion state as a brake command and reports velocities nobody
+sent, which looks like data rather than like an error. The frames that go by
+before the answer arrives are counted as `agilex_undecided`; both discriminators
+are periodic at 50 Hz, so the wait is tens of milliseconds.
+
+Sending the wrong generation is worse than sending nothing. A v2 command for a
+0.25 m/s crawl is `00 FA 00 00 …`; a v1 vehicle reads byte 2 as `linear_percentage`
+= 0 and byte 3 as `angular_percentage` = 250, clamps it, and yaws at its maximum
+rate. So `agx-cmd` defaults to `option protocol 'auto'`, reads the answer out of
+`can-bridge`'s status file, and **withholds every command until it has one** -
+counted as `protocol_skips`, and logged once at startup so an armed stick that
+moves nothing has a visible reason.
+
+The v1 percentages are fractions of the vehicle's own maxima, not of `max_linear`.
+These are the exact divisors `ProtocolV1Parser<ScoutMiniLimits>` uses, and they
+are the MINI's, not the plain SCOUT's (which is 1.5 m/s, 0.5235 rad/s, no lateral):
+
+```
+AGX1_MINI_MAX_LINEAR   3.0    m/s
+AGX1_MINI_MAX_ANGULAR  2.5235 rad/s
+AGX1_MINI_MAX_LATERAL  2.0    m/s
+```
+
+To go slower, clamp the intent before encoding - which is what `max_linear` does.
+Dividing by `max_linear` instead would turn walking pace into 100%.
+
+One consequence worth knowing before the first drive: on v1 the command
+resolution is 30 mm/s, so walking-pace commands are small integers (0.5 m/s is
+17%) and a fine correction below 30 mm/s rounds to zero. v2 has 1 mm/s.
+
+**Which one this vehicle is has not been observed yet.** Both paths are
+implemented and tested, so it costs nothing to find out - see the bring-up order
+below.
 
 ### Still read your own ids
 
@@ -181,5 +237,55 @@ ground, and add your own heartbeat.
 - injection works once `--allow-inject` is given
 - tracked ids decode into the status file with counts and ages
 
+The protocol v1 encoder and decoder are tested in
+`../can-bridge/test/test_agilex.c` against values computed by hand from
+`agilex_msg_parser_v1.c` - the checksum formula, percentage saturation at ±100,
+a zero maximum commanding zero rather than dividing, and a corrupt frame being
+refused but counted.
+
+The generation choice is tested end to end in `../agx-cmd/test/test_protocol.py`,
+which runs the daemon and reads the frames it emits:
+
+- with nothing known, every command is withheld and counted, while teleop input
+  is still being read
+- a conflicted bus (`"unknown"`) and an unparseable status file both withhold too
+- v1 emits `0x130` with a percentage of 3.0 m/s, a rolling counter and a valid
+  checksum on every frame
+- v2 emits `0x111` with mm/s and no checksum byte
+- `--protocol v1` commands with no detector at all, for a bench
+- a status file that changes generation mid-run does not change what is sent
+
+On emulated mipsel (`emu/run-emu.py`, vcan on the guest's own kernel) the whole
+v1 command chain runs end to end - TELE into `agx-cmd`, its inject datagram into
+`can-bridge`, and the frame back off `vcan0` where a second instance reads it:
+
+```
+0x130 on the bus: 01 00 11 00 00 00 2C 77   (45 frames)
+                  ^  ^  ^              ^  ^
+                  |  |  17% linear     |  checksum, computed on soft-float
+                  |  clear no errors   rolling count
+                  CAN control mode
+```
+
+17%, not 100%: full stick is `--max-linear 0.5` and v1 divides by the vehicle's
+3.0 m/s. The same run confirms `0x241` alone reads as v2, `0x151` alone as v1,
+both together going back to `unknown`, and `agx-cmd` picking the generation out
+of `can-bridge`'s status file rather than being told.
+
 Not verified, because it needs the hardware: a real USB-CAN adapter enumerating
-on the router, `gs_usb` binding on mipsel, and anything about the vehicle.
+on the router, `peak_usb` binding on mipsel, **which generation this vehicle
+speaks**, and the sign of the lateral axis.
+
+### The first minute on the real bus
+
+In this order, because each step makes the next one safe:
+
+1. `can-bridge --interface can0 --discover` with no `--allow-inject`. Read-only;
+   it cannot move anything.
+2. Look at `agilex_protocol` in `/var/run/can-bridge.json`. `v1` or `v2` answers
+   the open question. `unknown` with `rx` climbing means neither discriminator is
+   arriving - check the ids in the log before going further.
+3. Check `decoded` climbing and `undecoded` flat. If `agilex_undecided` keeps
+   rising, step 2 never settled.
+4. Only then, wheels off the ground, `--allow-inject` plus `agx-cmd` enabled, and
+   confirm the lateral sign - it is the one thing no document settles.

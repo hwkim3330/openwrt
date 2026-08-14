@@ -81,10 +81,17 @@ def main():
 
     tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+    # --protocol v2 is not a default being papered over: decode_inject() below
+    # reads mm/s big-endian, which is the v2 command, and every physical check
+    # in this file is expressed in those units. Without it the daemon would
+    # correctly refuse to command anything at all, because nothing here is
+    # publishing what generation the bus is - that refusal is its own test, in
+    # test_protocol.py.
     proc = subprocess.Popen(
         [BIN, "-f", "-l", str(TELE_PORT), "-i", f"127.0.0.1:{INJECT_PORT}",
          "-L", str(MAX_LIN), "-X", str(MAX_LAT), "-A", str(MAX_ANG),
-         "-a", str(ACCEL), "-H", str(RATE), "-t", "300", "-S", STATUS],
+         "-a", str(ACCEL), "-H", str(RATE), "-t", "300", "-S", STATUS,
+         "--protocol", "v2"],
         stderr=subprocess.PIPE, text=True)
     time.sleep(0.7)
     if proc.poll() is not None:

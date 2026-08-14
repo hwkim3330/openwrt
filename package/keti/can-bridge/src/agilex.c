@@ -40,6 +40,131 @@ static void be16_sat(uint8_t *p, double v, double scale)
 	p[1] = (uint8_t)((uint16_t)(int16_t)n & 0xff);
 }
 
+/* ------------------------------------------------------- protocol v1 ---- */
+
+uint8_t agx1_checksum(uint32_t can_id, const uint8_t *data, uint8_t dlc)
+{
+	uint8_t sum = (uint8_t)(can_id & 0xff) + (uint8_t)((can_id >> 8) & 0xff)
+		    + dlc;
+	int i;
+
+	/* Every byte but the last, which is where the result goes. */
+	for (i = 0; i + 1 < dlc; i++)
+		sum += data[i];
+	return sum;
+}
+
+bool agx1_decode(struct agx_state *s, uint32_t can_id, const uint8_t *data,
+		 uint8_t dlc)
+{
+	/*
+	 * Both rejections below count as unknown rather than returning quietly.
+	 * The reason is the case this decoder exists for: if the vehicle turns
+	 * out to be v2 and this is what is running, every frame fails the
+	 * checksum - and an early return would leave decoded and unknown both at
+	 * zero, which reads as a bus with nothing on it. Counting them makes
+	 * "wrong generation" look different from "no traffic", which is the whole
+	 * question the first minute on real hardware has to answer.
+	 */
+	if (dlc != 8) {
+		s->unknown++;
+		return false;
+	}
+	/* A wrong checksum means the frame is not to be trusted, not that it is
+	 * to be decoded with a warning. */
+	if (agx1_checksum(can_id, data, dlc) != data[7]) {
+		s->unknown++;
+		return false;
+	}
+
+	switch (can_id) {
+	case AGX1_ID_MOTION_STATE:
+		/* Big-endian int16 in thousandths, same as v2's state frame. */
+		s->linear_mps = be16s(data + 0) / 1000.0;
+		s->angular_rps = be16s(data + 2) / 1000.0;
+		s->lateral_mps = be16s(data + 4) / 1000.0;
+		s->steering_rad = 0.0;		/* unused on a mecanum base */
+		s->motion_valid = true;
+		if (s->lateral_mps != 0.0)
+			s->lateral_seen = true;
+		s->decoded++;
+		return true;
+	case AGX1_ID_SYSTEM_STATE:
+		s->vehicle_state = data[0];
+		s->control_mode = data[1];
+		s->battery_v = ((data[2] << 8) | data[3]) / 10.0;
+		s->error_code = (uint16_t)((data[4] << 8) | data[5]);
+		s->system_valid = true;
+		s->decoded++;
+		return true;
+	case AGX1_ID_LIGHT_STATE:
+	case AGX1_ID_VALUE_SET_STATE:
+		/*
+		 * Recognised and deliberately not parsed - counted as decoded
+		 * anyway, because the number that matters here is "does this
+		 * decoder understand the bus". A healthy v1 vehicle sends these
+		 * periodically, and letting them raise `undecoded` would make
+		 * doc/CAN.md's own rule - undecoded climbing while decoded stays
+		 * flat means the wrong generation - fire on a bus that is in fact
+		 * the right one.
+		 *
+		 * Note 0x211 is the *value set* state here and the *system* state
+		 * in v2, which is the collision that makes reading a frame without
+		 * knowing the generation a way to publish a battery voltage that
+		 * was never sent.
+		 */
+		s->decoded++;
+		return true;
+	default:
+		if (can_id >= AGX1_ID_ACT_STATE_BASE &&
+		    can_id <= AGX1_ID_ACT_STATE_BASE + 3) {
+			s->decoded++;
+			return true;
+		}
+		s->unknown++;
+		return false;
+	}
+}
+
+/* Round half away from zero, then clamp to a signed percentage. */
+static int8_t pct_sat(double v, double max)
+{
+	double f;
+	long p;
+
+	if (max <= 0.0)
+		return 0;
+	f = v / max * 100.0;
+	p = (long)(f >= 0 ? f + 0.5 : f - 0.5);
+	if (p > 100)
+		p = 100;
+	if (p < -100)
+		p = -100;
+	return (int8_t)p;
+}
+
+void agx1_encode_motion(uint8_t out[8], double linear_mps, double angular_rps,
+			double lateral_mps, double max_linear_mps,
+			double max_angular_rps, double max_lateral_mps,
+			uint8_t count)
+{
+	memset(out, 0, 8);
+	out[0] = AGX1_CTRL_MODE_CAN;
+	out[1] = AGX1_ERROR_CLR_NONE;
+	out[2] = (uint8_t)pct_sat(linear_mps, max_linear_mps);
+	out[3] = (uint8_t)pct_sat(angular_rps, max_angular_rps);
+	/*
+	 * Lateral, with the same caveat as the v2 encoder: which way is positive
+	 * is the one thing that cannot be settled from a document. Confirm it
+	 * with the wheels off the ground and use the bridge's lateral_invert
+	 * rather than editing this.
+	 */
+	out[4] = (uint8_t)pct_sat(lateral_mps, max_lateral_mps);
+	out[5] = 0;
+	out[6] = count;
+	out[7] = agx1_checksum(AGX1_ID_MOTION_CMD, out, 8);
+}
+
 void agx_encode_motion(uint8_t out[8], double linear_mps, double angular_rps,
 		       double lateral_mps)
 {
