@@ -356,7 +356,7 @@ int main(int argc, char **argv)
 	uint64_t next_tx, next_status;
 	int rfd, tfd, c;
 
-	g.listen_port = 7602;
+	g.listen_port = 7722;
 	g.max_linear = 0.5;
 	g.max_lateral = 0.5;
 	g.max_angular = 0.8;
