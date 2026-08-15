@@ -21,7 +21,7 @@ start_service() {
 	config_get max_angular cmd max_angular 0.8
 	config_get accel       cmd accel 1.0
 	config_get_bool lateral_invert cmd lateral_invert 0
-	config_get rate        cmd rate 20
+	config_get rate        cmd rate 50
 	config_get deadman     cmd deadman 300
 	config_get protocol    cmd protocol auto
 	config_get bridge_status cmd bridge_status /var/run/can-bridge.json

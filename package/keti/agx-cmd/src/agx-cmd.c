@@ -444,7 +444,8 @@ static void usage(const char *me)
 "  -a, --accel PER_S2       slew limit (default 1.0)\n"
 "      --lateral-invert     flip the strafe sign, if the vehicle goes the\n"
 "                           wrong way; see agilex.h on why this is a flag\n"
-"  -H, --rate HZ            command rate (default 20)\n"
+"  -H, --rate HZ            command rate (default 50, which is the rate\n"
+"                           AgileX's own SDK requires; see doc/CAN.md)\n"
 "  -t, --deadman MS         neutral and stop after this long without a frame\n"
 "                           (default 300)\n"
 "  -z, --zero-frames N      explicit zero commands after a loss (default 10)\n"
@@ -491,7 +492,18 @@ int main(int argc, char **argv)
 	g.max_lateral = 0.5;
 	g.max_angular = 0.8;
 	g.accel = 1.0;
-	g.rate_hz = 20;
+	/*
+	 * 50 Hz, because that is what the vehicle is documented to want.
+	 *
+	 * ugv_sdk's SendMotionCommand carries "must be called at a frequency >=
+	 * 50Hz" directly above it. This ran at 20 Hz, which satisfies any
+	 * plausible command timeout and therefore looked fine, but "looked fine"
+	 * is not a reason to sit below a stated requirement when the cost of
+	 * meeting it is 50 eight-byte frames a second on a bus with room to
+	 * spare - and the cost of being wrong is a vehicle that stutters or
+	 * stops while someone is walking beside it.
+	 */
+	g.rate_hz = 50;
 	g.deadman_ms = 300;
 	g.zero_frames = 10;
 	g.proto = PROTO_AUTO;

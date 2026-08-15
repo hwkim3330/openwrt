@@ -276,6 +276,19 @@ Not verified, because it needs the hardware: a real USB-CAN adapter enumerating
 on the router, `peak_usb` binding on mipsel, **which generation this vehicle
 speaks**, and the sign of the lateral axis.
 
+### Command rate
+
+`ugv_sdk` puts "must be called at a frequency >= 50Hz" directly above
+`SendMotionCommand`, for both generations, so `agx-cmd` defaults to 50 Hz. It
+ran at 20 Hz first, which meets any plausible command timeout and showed no
+problem in testing - but there is no reason to sit under a stated requirement
+here. Fifty eight-byte frames a second is nothing on a 500 kbit/s bus, and the
+failure it guards against is a vehicle that stutters while somebody is walking
+next to it.
+
+The teleop input is already 50 Hz while armed (`Wire.TELE_HZ_ARMED`), so this
+does not add a rate conversion; it removes one.
+
 ### The first minute on the real bus
 
 In this order, because each step makes the next one safe:
