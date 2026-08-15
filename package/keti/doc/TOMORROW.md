@@ -1,197 +1,144 @@
-# Bench runbook
+# Bench runbook — the CAN session
 
-One page, in order, with the decision at each step. `BRINGUP.md` is the same
-ground with the reasoning attached; this is the version to work from with the
-board in front of you.
+One page, in order, with the decision at each step. `CAN.md` is the same ground
+with the reasoning attached; this is the version to work from with the vehicle in
+front of you.
 
-Budget about an hour. Everything that did not need the board is already done and
-verified, so this session is only about four things: does it flash, does DBDC
-come up, does the lidar keep up, and what does the EEPROM say.
+The previous edition of this page was the first-flash runbook. That session
+happened on 2026-08-13 and its results are in `VERIFY.md`; the procedure itself
+lives in `BRINGUP.md`, which is where to look if a board ever needs flashing from
+scratch again.
+
+Budget about an hour. Everything that does not need the vehicle is done: both
+protocol generations are implemented and tested, the command path refuses to
+guess between them, and the whole v1 chain has run on emulated mipsel. This
+session answers one question the bench cannot — **which generation this vehicle
+speaks** — and then, only if that goes well, one more: **which way is positive
+lateral**.
 
 ## Have ready
 
-- the A3004NS-M, and its stock firmware image (to go back)
-- an ethernet cable from the PC to a **LAN** port
-- `openwrt-ramips-mt7621-iptime_a3004ns-m-initramfs-kernel.bin`
-- `openwrt-ramips-mt7621-iptime_a3004ns-m-squashfs-sysupgrade.bin`
-- the StreamCam with a USB-C-male → USB-A-male cable
-- the OS-64 and its power
-- optional, and only if a USB 3.0 hub is on hand: the USB-CAN adapter
+- the router, and `openwrt-ramips-mt7621-iptime_a3004ns-m-squashfs-sysupgrade.bin`
+- the PEAK PCAN-USB adapter and the vehicle's 4-pin CAN connector
+- the SCOUT MINI Omni, **on a stand with the wheels clear of the ground**
+- its remote, powered on, so there is a way to stop it that does not involve
+  this software
 
-A 3.3 V USB-UART on J4 at 57600 is worth wiring **before** flashing rather than
-after. If the board comes up headless you will want to know why, and the pinout
-is `[3V3] (TXD) (RXD) (GND)` — leave 3V3 unconnected.
+Do not flash the vehicle. `SCOUT-FIRMWARE.md` covers what was found: there is no
+SCOUT MINI firmware image, and the two methods that circulate for getting one
+were each checked and neither works.
 
-## 1 · Flash the initramfs — 10 min
+## 0 · Flash the router first — 10 min
 
-Stock web UI → firmware upgrade → the **initramfs** image. This runs from RAM;
-a power cycle returns you to stock, which is why it goes first.
+The running firmware predates all of this. Without it the router has no v1
+support, `agx-cmd` is on the old port, and the ring default is wrong.
 
 ```sh
-ping 192.168.1.1          # from the PC, LAN port
-ssh root@192.168.1.1
+package/keti/tools/flash-router            # checks the image, then explains
 ```
 
-- **it boots** → step 2.
-- **it refuses the file** → the u-boot image-name check rejected it.
-  `UIMAGE_NAME := a3004nm` came from the original submission and was never
-  verified here. Power cycle back to stock and say so; it is a one-line fix once
-  the real string is known, and the serial console prints it.
-- **nothing on the network** → serial console. Do not reflash blind.
+`-n` is required on mt7621: the board.d catch-all is compat version 1.1 and the
+image defaults to 1.0, so sysupgrade refuses to keep settings. The tool says so
+rather than leaving it to be discovered.
+
+## 1 · Bring the bus up, read-only — 5 min
+
+```sh
+uci set can-bridge.bus.enabled='1'
+uci set can-bridge.bus.interface='can0'
+uci set can-bridge.bus.discover='1'
+uci set can-bridge.bus.agilex='1'
+uci commit can-bridge && /etc/init.d/can-bridge restart
+logread -e can-bridge
+```
+
+`allow_inject` stays at 0. Nothing in this step can move anything: the daemon has
+no write path until that flag is set, and refusals are counted.
+
+The adapter needs `kmod-can-usb-peak` — a PCAN-USB Pro FD is not `gs_usb`. If
+`can0` does not appear, that is the first thing to check.
 
 ## 2 · The one question that matters — 2 min
 
 ```sh
-ls /sys/class/ieee80211/
+sed -n 's/.*"agilex_protocol": "\([a-z0-9]*\)".*/\1/p' /var/run/can-bridge.json
 ```
 
-**Two phys is the whole point of this exercise.** The port was closed in 2023
-because only one came up.
+- **`v1`** → percentages of 3.0 m/s, checksummed, rolling counter. `agx-cmd`
+  picks this up on its own.
+- **`v2`** → mm/s, no checksum. Likewise.
+- **`unknown` with `rx` climbing** → neither discriminator is arriving. Look at
+  the ids in the log before going further; the table in `CAN.md` is v2's, and if
+  nothing matches either set this is not an AgileX vehicle at the ids we expect.
+- **`unknown` and `rx` at 0** → the bus is not wired or not terminated. See the
+  termination note in `CAN.md`; it is the thing most likely to bite.
 
-- **phy0 and phy1** → the fix works. This is the result that unblocks the
-  upstream PRs.
-- **phy0 only** → the override did not take. `doc/DBDC.md` has the checks. Try
-  `echo 1 > /sys/kernel/debug/ieee80211/phy0/mt76/dbdc`; if a second phy appears
-  that way, the hardware is fine and the DT path is what is wrong, which is a
-  much smaller problem.
+Write the answer down in `CAN.md` where it says the generation has not been
+observed yet. That sentence is the last thing in this tree that is guessing.
 
-Either way, before touching anything else:
+## 3 · Does the decoder agree with the bus — 3 min
 
 ```sh
-first-boot-report > /tmp/report.txt
+grep -E '"decoded"|"undecoded"|agilex_undecided' /var/run/can-bridge.json
 ```
 
-That collects the three things only this board can answer — DBDC state, the
-EEPROM's band and chainmask bytes, and every MAC — and it takes a second. Copy
-it off with `scp`, and compare the MACs against the sticker on the case while
-the board is in your hands, because that is the part nobody can do later.
+`decoded` climbing and `undecoded` flat means the generation is right.
+`undecoded` climbing means it is not, whatever step 2 said. `agilex_undecided`
+should stop rising the moment step 2 answered.
 
-## 3 · Commit to flash — 5 min
+Battery volts and a plausible motion state in the same file are the confirmation
+that the fields are being read at the right offsets and the right endianness.
 
-Only once step 2 looks right:
+## 4 · Wheels clear, then command — 20 min
+
+Only now, and only with the wheels off the ground.
 
 ```sh
-scp openwrt-...-squashfs-sysupgrade.bin root@192.168.1.1:/tmp/
-ssh root@192.168.1.1 'sysupgrade -n /tmp/openwrt-...-squashfs-sysupgrade.bin'
+uci set can-bridge.bus.allow_inject='1'
+uci commit can-bridge && /etc/init.d/can-bridge restart
+
+uci set agx-cmd.cmd.enabled='1'
+uci commit agx-cmd && /etc/init.d/agx-cmd restart
+logread -e agx-cmd            # says which generation it settled on
 ```
 
-Then set a WiFi password — the firmware ships with the radios enabled and
-unconfigured deliberately:
+Two switches, both off by default, neither implying the other. If `agx-cmd`
+reports `protocol_skips` rising and sends nothing, that is the safeguard working:
+step 2 has not answered.
+
+Test in this order, because each makes the next safe:
+
+1. **Deadman.** Arm, command forward, then put the tablet down or kill the app.
+   The wheels must stop. `deadman_stops` in `/var/run/agx-cmd.json` increments.
+2. **Forward.** A small forward command should turn the wheels forward. If it
+   goes backwards, the linear sign is wrong and nothing else should be tried.
+3. **Lateral.** Command strafe right. The one convention no document settles.
+   If the vehicle would go left, set `option lateral_invert '1'` rather than
+   editing `agilex.c` — that flag exists for exactly this.
+
+Commands go out at 50 Hz, which is what `ugv_sdk` states the vehicle wants. On v1
+the resolution is 30 mm/s, so slow crawls come out as small integers; that is the
+protocol, not a bug.
+
+## What to leave alone
+
+- The vehicle's firmware.
+- `max_linear` and friends. They are walking pace on purpose. Raise them
+  deliberately, after the three tests above, and not while the vehicle is on the
+  floor.
+
+## If something is wrong
 
 ```sh
-uci set wireless.default_radio1.ssid='A3004-SENSOR'
-uci set wireless.default_radio1.encryption='psk2'
-uci set wireless.default_radio1.key='<password>'
-uci commit wireless && wifi reload
-iwinfo
+uci set can-bridge.bus.allow_inject='0'
+uci set agx-cmd.cmd.enabled='0'
+uci commit && /etc/init.d/can-bridge restart; /etc/init.d/agx-cmd stop
 ```
 
-## 4 · Camera — 5 min
-
-```sh
-sensor-probe            # read the VERDICT line
-/etc/init.d/ustreamer start
-```
-
-The StreamCam's formats were measured on a PC already: MJPEG to 1920×1080, and
-1280×720@60 is the shipped default at a measured 39.6 Mbit/s. What is **not**
-known is what MT7621 does while moving it, so watch `top` — `ustreamer` should
-barely register, because it copies rather than encodes. If it is eating a core,
-something is transcoding and the format negotiation went wrong.
-
-Then `http://192.168.1.1:8080/stream` in a browser.
-
-## 5 · Lidar — 15 min
-
-Gigabit LAN port. `sensor-probe` prints link speeds; 100 Mbit will not work and
-the sensor will not negotiate it anyway.
-
-```sh
-cat /tmp/dhcp.leases                 # get the sensor's MAC
-uci set dhcp.ouster.mac='<mac>'      # the host entry already exists
-uci commit dhcp && /etc/init.d/dnsmasq restart
-```
-
-Point it at the router, from any machine on the LAN:
-
-```sh
-curl -X POST http://192.168.1.50/api/v1/sensor/config \
-  -H 'Content-Type: application/json' \
-  -d '{"udp_dest": "192.168.1.1", "udp_port_lidar": 7502}'
-```
-
-```sh
-uci set ouster-edge.lidar.enabled='1'
-uci set ouster-edge.lidar.sensor_ip='192.168.1.50'
-uci commit ouster-edge && /etc/init.d/ouster-edge start
-logread -e ouster-edge               # expect the detected profile and packet size
-```
-
-**The number to watch is `missed_columns`, and it must stay at zero — but only
-once the sensor's azimuth window is known.**
-
-A sensor restricted to an arc does not send the columns outside it, and their
-measurement ids are simply absent from the stream. On the bench a perfectly
-healthy OS-1-64 set to `[315000, 45000]` reported **72% missing columns** until
-the window was passed through, because every revolution legitimately skipped
-three quarters of its ids. `ouster-metadata` now reads `azimuth_window` from the
-sensor and the init script hands it to the daemon, so check that it arrived
-before believing this number:
-
-```sh
-grep -o '"azimuth_window": \[[^]]*\]' /var/run/ouster-edge.json   # or absent for a full sweep
-```
-
-
-```sh
-sensor-lan-tune
-while :; do
-  sed -n 's/.*"missed_columns": \([0-9]*\).*/\1/p' /var/run/ouster-edge.json
-  sleep 2
-done
-```
-
-- **stays 0** → the router keeps up. Note the CPU load; that is the number the
-  bandwidth budget in `ARCHITECTURE.md` predicted and nobody has checked.
-- **climbing** → almost certainly fragment reassembly. `sensor-lan-tune` tries a
-  9000-byte MTU; whether MT7621 accepts one is itself unverified. If it does not,
-  drop the sensor to 512×10 and see whether that holds — halving the data rate is
-  a legitimate answer.
-
-## 6 · Dashboard and tablet — 5 min
-
-```
-http://192.168.1.1/sensors/
-```
-
-Then join the 5 GHz AP from the tablet and open the same URL, or use the app and
-enter `192.168.1.1`. Both were verified against the real daemons already, so if
-either misbehaves here it is the router that is different, not them.
-
-The **feed** pill should read `push`. If it says `polling`, port 7603 is not
-reachable.
-
-## Leave for another day
-
-CAN and RC both need a USB hub, because the camera owns the only USB port. They
-are also the two things that can wait: `can-bridge` and `rc-ibus` are verified
-against `vcan` and a pty respectively, so what is untested there is only whether
-the adapters enumerate. See `CAN.md` and `RC-AND-WIFI.md`.
-
-Teleop should not be pointed at anything that moves until the deadman has been
-tested with the wheels off the ground. See `TELEOP.md`.
-
-## If you have to go back
-
-```sh
-sysupgrade /tmp/<stock-image>
-```
-
-That is the whole safety net, and it is why step 1 uses the initramfs image: a
-power cycle undoes it.
+Either switch alone is enough to make the router harmless again.
 
 ## After it works
 
-`doc/UPSTREAM.md` has the checklist for opening the two pull requests. Nothing
-there should be opened before step 2 has a good answer — submitting an unflashed
-device port is exactly how the first attempt got stuck.
+`navigate` already emits TELE to `agx-cmd`, so a destination on the tablet map
+becomes motion the moment this session succeeds. Do that on a stand first too:
+`navigate --dry-run` plans and reports without commanding.
