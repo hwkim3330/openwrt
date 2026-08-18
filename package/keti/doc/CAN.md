@@ -338,11 +338,33 @@ What is still open:
   not what blocked the session - it is still unanswered, and it matters because
   identifying which field is which is easiest while driving by remote.
 
-One thing that has no explanation yet: the channel with the cable attached
-enters an error state within 200 ms of coming up, every time, while the
-unconnected channel on the same device does not. With only a resistor across the
-pair and no vehicle behind it, the differential is zero, which is idle - that
-should produce no error at all.
+That last unexplained point resolved before the session ended, and it changes
+the conclusion.
+
+An exhaustive pass - 15 bitrates from 10k to 1M, two sample points, listen-only,
+and CAN FD pairs, 64 settings in all, with the vehicle powered - produced frames
+nowhere and errors at exactly one setting: the **first one tried**. The error
+follows the first bring-up, not the bitrate. So the receive errors seen all
+session were a link-up artifact, not traffic, and the `136` that seemed to
+confirm them was a value the driver never refreshes.
+
+The reader itself is not in doubt: a frame sent on an idle channel comes back
+through a second socket and decodes correctly, so the socket path, the
+byte layout and the labelling all work.
+
+What does fit every observation is the missing ground. The adapter's LED tracks
+the vehicle's power state exactly - green with the vehicle off, red with it on,
+and green again at 50 kbit/s where the receiver is more tolerant. That is what a
+pair floating outside the transceiver's common-mode range looks like: the DC
+condition changes when the 24 V system comes up, the receiver cannot resolve
+anything, and no data is involved at all.
+
+This vehicle's external CAN port breaks out only CAN_H and CAN_L; the rest of
+the connector is 24 V. **The 24 V return is the ground reference to use** - into
+D-Sub pin 3, with the positive kept well away from it. That is the first thing
+to try next session, and if frames do not appear immediately afterwards, the
+pair is not on the vehicle's CAN bus and the resistor-removal continuity test
+is the next step.
 
 `tools/candiag/` has the programs used: `canshow.py` for a live view,
 `canwatch.py` for a short capture with error frames decoded, `canscan2.py` for
