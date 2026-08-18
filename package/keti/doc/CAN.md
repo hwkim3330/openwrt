@@ -289,6 +289,66 @@ next to it.
 The teleop input is already 50 Hz while armed (`Wire.TELE_HZ_ARMED`), so this
 does not add a rate conversion; it removes one.
 
+## Bench session 2026-08-18: nothing on the wire, and what was ruled out
+
+The PCAN-USB Pro FD went on a real SCOUT MINI Omni and **not one frame arrived**.
+Recorded because most of the session was spent eliminating things, and repeating
+that would waste the next one.
+
+What was established:
+
+- **500 kbit/s is right.** Both manuals in the vendor SDK say the same thing -
+  `SCOUT MINI用户手册1.0协议` and `2.0协议` both state CAN2.0B, 波特率为500K,
+  Motorola byte order. The v1 manual is a scanned image with no text layer; the
+  v2 one extracts with `pdftotext`.
+- **Wire colours**, from the v2 manual's aviation-plug figure: red VCC, black
+  GND, **yellow CAN_H, blue CAN_L**. On this vehicle the external CAN port
+  breaks out only the two CAN pins; the rest of the connector is 24 V.
+- **The adapter is fine.** `peak_usb`, firmware 3.5.3, two channels, and the USB
+  link negotiated 480 Mbit/s - which rules out the known failure where a
+  PCAN-USB Pro FD on a full-speed (12 Mbit) port silently never puts packets on
+  the wire.
+- **The adapter's error counters cannot be trusted.** Transmitting one frame on
+  a channel with nothing attached must raise the transmit error counter - no ACK
+  is an error by definition - and it stayed at zero while the driver counted the
+  packet as sent. So `berr-counter rx 136`, which appeared instantly on every
+  bitrate and never moved again, is not evidence of anything. Two hours of this
+  session were spent reasoning from that number before the transmit test showed
+  it was junk.
+- **Nothing decodes.** Eight bitrates (20k to 1M), classic and listen-only, four
+  sample points, CAN FD arbitration/data pairs, both channels, and both control
+  modes: zero data frames and zero error frames in every combination.
+
+What is still open:
+
+- **Is the pair actually on the vehicle's CAN bus?** The 120 ohms measured
+  across it is a resistor fitted at the vehicle-side connector by hand, so it
+  proves the resistor exists and nothing else. The test is to remove it and
+  measure again: still ~120 ohms means the vehicle's own termination is there
+  and the pair is real; open means the pair never reaches the bus.
+- **Is the vehicle's transceiver powered?** CAN_H and CAN_L should each sit near
+  2.5 V against the chassis. Both at 0 V would explain every observation here.
+- **No ground reference.** Two wires and nothing tying the vehicle's potential
+  to the PC's. The 24 V return on the same connector is the wire to use - into
+  D-Sub pin 3, with the 24 V positive kept well away from it.
+- **Does feedback flow in remote-control mode?** The gitbook says CAN control
+  mode must be enabled (remote SWB to the top, which disables driving by
+  remote), but that sentence is about accepting commands and may not describe
+  the feedback frames. Both modes were tried and both gave nothing, so this was
+  not what blocked the session - it is still unanswered, and it matters because
+  identifying which field is which is easiest while driving by remote.
+
+One thing that has no explanation yet: the channel with the cable attached
+enters an error state within 200 ms of coming up, every time, while the
+unconnected channel on the same device does not. With only a resistor across the
+pair and no vehicle behind it, the differential is zero, which is idle - that
+should produce no error at all.
+
+`tools/candiag/` has the programs used: `canshow.py` for a live view,
+`canwatch.py` for a short capture with error frames decoded, `canscan2.py` for
+the bitrate and FD sweep, `canauto.py` to sit and wait for the adapter and
+report the moment anything arrives.
+
 ### The first minute on the real bus
 
 In this order, because each step makes the next one safe:
