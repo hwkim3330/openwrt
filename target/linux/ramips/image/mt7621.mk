@@ -1919,6 +1919,19 @@ define Device/iptime_a3004t
 endef
 TARGET_DEVICES += iptime_a3004t
 
+define Device/iptime_a5004ns-m
+  IMAGE_SIZE := 16128k
+  UIMAGE_NAME := a5004nm
+  DEVICE_VENDOR := ipTIME
+  DEVICE_MODEL := A5004NS-M
+  # USB 2.0 on this board, per the vendor's own hardware file
+  # (board.usb.slot[0].support_mode=2.0), so kmod-usb3 would be dead weight.
+  # No dsa-migration: this device never shipped a swconfig release.
+  DEVICE_PACKAGES := kmod-mt7615-firmware kmod-usb-ledtrig-usbport \
+	-uboot-envtools
+endef
+TARGET_DEVICES += iptime_a5004ns-m
+
 define Device/iptime_a6004ns-m
   $(Device/dsa-migration)
   IMAGE_SIZE := 16128k

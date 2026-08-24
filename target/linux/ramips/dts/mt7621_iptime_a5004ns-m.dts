@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+
+#include "mt7621_iptime_a6004ns-m.dtsi"
+
+/ {
+	compatible = "iptime,a5004ns-m", "mediatek,mt7621-soc";
+	model = "ipTIME A5004NS-M";
+};
+
+/*
+ * The bands are the other way round from the A6004NS-M.
+ *
+ * That board's dtsi puts 5 GHz on pcie0 with the EEPROM at 0x0 and 2.4 GHz on
+ * pcie1 at 0x8000. This board is the reverse, and it is not a guess: the stock
+ * firmware's own radio profile says so -
+ *
+ *   INDEX0=MT7615  profile mt7615.1.2G.dat  EEPROM_offset=0x0
+ *   INDEX1=MT7615  profile mt7615.1.5G.dat  EEPROM_offset=0x8000
+ *
+ * Getting it backwards would not fail loudly. Each radio would come up against
+ * the other's calibration data, which is the kind of wrong that looks like poor
+ * range rather than like a mistake.
+ */
+&pcie0 {
+	wifi@0,0 {
+		/delete-property/ ieee80211-freq-limit;
+		ieee80211-freq-limit = <2400000 2500000>;
+	};
+};
+
+&pcie1 {
+	wifi@0,0 {
+		/delete-property/ ieee80211-freq-limit;
+		ieee80211-freq-limit = <5000000 6000000>;
+	};
+};
