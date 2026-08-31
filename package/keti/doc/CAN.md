@@ -384,3 +384,42 @@ In this order, because each step makes the next one safe:
    rising, step 2 never settled.
 4. Only then, wheels off the ground, `--allow-inject` plus `agx-cmd` enabled, and
    confirm the lateral sign - it is the one thing no document settles.
+
+## Where the bench attempt stopped, 2026-08
+
+Not working, and the remaining unknown is the vehicle rather than this code.
+
+Ruled out on our side, each by measurement rather than argument:
+
+- **The adapter.** A CANable2 (`16d0:117e`) enumerates, and its two interfaces are
+  both CDC-ACM — no vendor-specific interface exists, so `gs_usb` cannot bind and
+  slcan is the only correct driver. `slcand -o -c -s6` brings `can0` up
+  ERROR-ACTIVE every time. **Do not pass `-t hw`**: the CANable2 does not do
+  hardware flow control and the port closes on the spot.
+- **The bitrate.** 500 kbit/s, CAN2.0B, Motorola byte order, from the manual.
+- **The pinout.** Figure 2.4 rendered at 600 dpi and read directly: pins 1 and 2 on
+  top, 3 and 4 below, and the table gives 1=VCC (23–29.2 V, 5 A), 2=GND,
+  3=CAN_H, 4=CAN_L.
+- **Termination.** Tried with the adapter's 120 Ω both on and off, no change.
+
+Never established: **whether the vehicle transmits at all.** Zero frames in every
+attempt, in every wiring configuration.
+
+One early reading looked like success and probably was not. A bring-up showed
+`RX 23 packets / 184 bytes`, which is exactly 23 eight-byte frames, and that was
+taken as proof the link had worked once. But `candump` was running and saw nothing,
+and the counter moved in the two seconds between `ip link set up` and `candump`
+starting — so it is more likely slcan misreading a firmware banner than vehicle
+traffic. Building on it was a mistake; the honest position is that the link has
+never demonstrably worked.
+
+Note that slcan reports no bus errors, ever. The error counters stay at zero whether
+the bus is silent, mis-wired or at the wrong bitrate, so "0 errors" is not evidence
+of anything and the three-way verdict in `tools/candiag/canweb.py` is only
+trustworthy for the "frames arriving" case.
+
+**The test that would settle it** is a multimeter on the vehicle's connector with
+the vehicle powered: CAN_H to GND and CAN_L to GND should each sit near 2.5 V. Zero
+volts means the chassis is not driving the bus, and no amount of rewiring at this
+end will change that. A second CAN adapter wired back to back would equally prove
+the host side independently of the vehicle.
