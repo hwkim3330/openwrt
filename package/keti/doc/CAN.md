@@ -552,3 +552,23 @@ line.
 
 Note the port has to be free to probe: slcand owns it once the interface is up, and
 two readers on one serial line turn the stream to nonsense.
+
+### This firmware answers `V` and nothing else
+
+slcan defines `F` - read the controller's status flags - and that would have been a
+genuine self-test: send a frame onto a bus with no other node, and if the error
+flags rise, the transceiver is really transmitting and really noticing the missing
+ACK. Tried it. This CANable2 firmware returns an empty response to `F`, `N`, `v`,
+`C`, `S6`, `O` and to a frame write. Only `V` answers.
+
+So the health of the CAN side cannot be read out of this adapter. Combined with the
+ACK requirement, that closes the question: **one adapter and three wires cannot
+verify the CAN transmit path, by any arrangement.** What can be verified is
+everything up to the adapter, and that is verified - `V` answers, so USB, driver and
+this code are all fine.
+
+A second adapter would settle it in a minute: two CANables wired H-H, L-L, GND-GND,
+send from one and watch the other. That is the test worth doing next, and it is
+worth doing before touching the vehicle again, because it separates "our CAN side is
+dead" from "the vehicle is not transmitting" - the two hypotheses this has been
+stuck between all session.
