@@ -478,3 +478,21 @@ The upgrade procedure is worth knowing for a different reason. The chassis waits
 during that window. So the `5A A5` frames are the application, and there is a
 bootloader underneath reachable only in those six seconds. Anything written to this
 port during power-on risks landing in it.
+
+### The serial frame format, solved
+
+    5A A5 | 0A | AA | seq | payload(6) | count | checksum
+     0  1 |  2 |  3 |  4  |   5..10    |  11   |    12
+
+    checksum = sum(bytes 0..11) & 0xFF      6637 of 6637 frames agree
+    count    = rolling, +1 per frame
+
+Found by trying the obvious candidates against a 6637-frame capture rather than by
+reading a spec: `sum(0..11)` matches every frame, and the near-misses (30/6637 for
+`sum(0..10)`, 37 for xor) are what a wrong rule looks like - a few accidental hits,
+not a pattern.
+
+So valid frames can be constructed. That is the prerequisite for driving over this
+port, and it is worth being explicit that constructing them is not the same as
+knowing what to put in them: the command frame's type byte and payload layout are
+still unknown, and this port also has a bootloader behind it.
