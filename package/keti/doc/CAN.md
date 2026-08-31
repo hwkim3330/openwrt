@@ -553,22 +553,43 @@ line.
 Note the port has to be free to probe: slcand owns it once the interface is up, and
 two readers on one serial line turn the stream to nonsense.
 
-### This firmware answers `V` and nothing else
+### A lone CANable can be tested after all - the command is `E`, not `F`
 
-slcan defines `F` - read the controller's status flags - and that would have been a
-genuine self-test: send a frame onto a bus with no other node, and if the error
-flags rise, the transceiver is really transmitting and really noticing the missing
-ACK. Tried it. This CANable2 firmware returns an empty response to `F`, `N`, `v`,
-`C`, `S6`, `O` and to a frame write. Only `V` answers.
+The section this replaces said the adapter could not be checked without a second
+node, on the grounds that slcan's `F` returned nothing. `F` returned nothing because
+this firmware does not have `F`. Its README lists `E` - return the error register -
+and `E` answers.
 
-So the health of the CAN side cannot be read out of this adapter. Combined with the
-ACK requirement, that closes the question: **one adapter and three wires cannot
-verify the CAN transmit path, by any arrangement.** What can be verified is
-everything up to the adapter, and that is verified - `V` answers, so USB, driver and
-this code are all fine.
+The register is the firmware's own latched bitmask (inc/error.h), not the
+controller's:
 
-A second adapter would settle it in a minute: two CANables wired H-H, L-L, GND-GND,
-send from one and watch the other. That is the test worth doing next, and it is
-worth doing before touching the vehicle again, because it separates "our CAN side is
-dead" from "the vehicle is not transmitting" - the two hypotheses this has been
-stuck between all session.
+    0 PERIPHINIT   1 USBTX_BUSY   2 CAN_TXFAIL   3 CANRXFIFO_OVERFLOW
+    4 FULLBUF_CANTX   5 FULLBUF_USBRX   6 FULLBUF_USBTX
+
+Bit 4 is the one that decides whether the CAN side is alive, which is not obvious
+because it reads as a complaint. `can_process()` hands a frame to the peripheral
+only while `HAL_FDCAN_GetTxFifoFreeLevel() > 0`, and advances its own tail either
+way. So a dead peripheral leaves the hardware FIFO reading empty forever, every
+frame gets offered and refused, and the software queue drains - bit 4 never sets.
+The software queue can only overflow if the hardware FIFO is full and staying full,
+and the only thing that keeps it full is a peripheral that accepted frames and is
+retransmitting them because nothing acknowledges.
+
+Measured, with nothing attached: 0x04 at the start, 0x14 after 200 frames at 1 kHz.
+Bit 4 set. **The adapter is fine.** It is initialised, it took the frames, and it is
+retrying them into an empty bus. So the silence on this bench was never the adapter.
+
+`package/keti/tools/candiag/selftest.py` runs this and prints a verdict. Two things
+it needs: auto-retransmission on (`A1` - with `A0` the controller gives up after one
+attempt and the queue drains, and the test says nothing), and a fresh baseline,
+because the register is latched and never cleared, so unplug and replug first.
+
+What is still untested is the transceiver's differential output and the wiring past
+it. A meter across CAN_H and CAN_L, or a second node, is the only way to reach that.
+
+**The same run tests the vehicle.** Attached to a chassis that is powered and on the
+bus, its controller acknowledges our frames, the FIFO drains, and bit 4 stays clear.
+Bit 4 setting with the vehicle attached means the vehicle is not acknowledging -
+which separates "our side is dead" from "the vehicle is not on the bus" without
+receiving a single frame from it. That is the pair this bench was stuck between, and
+it can now be settled in thirty seconds.
