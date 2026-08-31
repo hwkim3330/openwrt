@@ -33,7 +33,45 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SYNC = b"\x5a\xa5"
 
+def decode(f):
+    """What the payload means, worked out by watching it while the vehicle drove.
+
+    Nothing here came from a document - the serial protocol is undocumented - so it
+    is written as what was observed rather than as fact:
+
+      seq 1   b7b8 tracked 24.9-25.0 while a 24 V pack sat there. 0.1 V units.
+      seq 2   three big-endian int16 that were zero at rest and moved together the
+              moment the sticks did, in 118 of 948 frames. Same shape as the CAN
+              0x131 feedback frame, so the same x1000 scaling is assumed: 0.001 m/s
+              and 0.001 rad/s.
+      seq 3-6 four frames with identical structure, a small signed value that
+              wandered around zero and a byte fixed at 0x1d = 29. Four motors, an
+              rpm and a temperature in Celsius, is the reading that fits.
+      seq 7   two bytes that summed to a constant while one rose and the other fell.
+              Not identified; shown raw.
+
+    The uncertainty is the point of labelling them "assumed" on the page.
+    """
+    if len(f) != 13:
+        return None
+    import struct
+    s16 = lambda o: struct.unpack(">h", f[o:o + 2])[0]
+    u16 = lambda o: struct.unpack(">H", f[o:o + 2])[0]
+    q = f[4]
+    if q == 1:
+        return {"name": "battery", "volts": round(u16(7) / 10.0, 1)}
+    if q == 2:
+        return {"name": "motion",
+                "linear_ms": round(s16(5) / 1000.0, 3),
+                "angular_rads": round(s16(7) / 1000.0, 3),
+                "lateral_ms": round(s16(9) / 1000.0, 3)}
+    if q in (3, 4, 5, 6):
+        return {"name": f"actuator {q - 2}", "rpm": s16(5), "temp_c": f[9]}
+    return {"name": "unknown", "raw": f[5:11].hex(" ")}
+
+
 state = {
+    "live": {},
     "frames": deque(maxlen=300),
     "bytes": 0,
     "total": 0,
@@ -99,7 +137,11 @@ def reader(dev, baud):
                         "seq": seq,
                         "payload": f[5:-2].hex(" ") if len(f) > 7 else "",
                         "tail": f[-2:].hex(" "),
+                        "decoded": decode(f),
                     })
+                    d = decode(f)
+                    if d:
+                        state["live"][seq] = d
         try:
             s.close()
         except Exception:
@@ -129,7 +171,7 @@ PAGE = r"""<!doctype html>
   <div class="card"><h2>Verdict</h2><div id="verdict" class="dim">…</div></div>
 </div>
 <div class="row" style="margin-top:12px;grid-template-columns:1fr 2fr">
-  <div class="card"><h2>Sequence byte</h2><table id="seq"></table></div>
+  <div class="card"><h2>Decoded (assumed)</h2><table id="live"></table></div>
   <div class="card"><h2>Last frames</h2><table id="last"></table></div>
 </div>
 <script>
@@ -143,9 +185,11 @@ async function tick(){
  verdict.innerHTML = d.error ? '<span class="bad">'+d.error+'</span>'
    : d.total>0 ? '<span class="good">framing cleanly — the chassis is alive and transmitting</span>'
    : '<span class="bad">no frames</span>';
- let s='<tr><th>byte 4</th><th>count</th></tr>';
- for(const [k,v] of Object.entries(d.seq).sort((a,b)=>a[0]-b[0])) s+=`<tr><td><code>${k}</code></td><td>${v}</td></tr>`;
- seq.innerHTML=s;
+ let s='<tr><th>seq</th><th>what</th><th>values</th></tr>';
+ for(const [k,v] of Object.entries(d.live||{}).sort((a,b)=>a[0]-b[0])){
+   const {name,...rest}=v;
+   s+=`<tr><td><code>${k}</code></td><td>${name}</td><td><code>${Object.entries(rest).map(([a,b])=>a+'='+b).join('  ')}</code></td></tr>`;}
+ live.innerHTML=s;
  let f='<tr><th>seq</th><th>len</th><th>payload</th><th>tail</th></tr>';
  for(const x of d.frames.slice(0,20))
    f+=`<tr><td><code>${x.seq}</code></td><td>${x.len}</td><td><code>${x.payload}</code></td><td class="dim"><code>${x.tail}</code></td></tr>`;
@@ -167,6 +211,7 @@ class H(BaseHTTPRequestHandler):
                     "total": state["total"], "bytes": state["bytes"],
                     "bad": state["bad"], "dev": state["dev"], "baud": state["baud"],
                     "seq": dict(state["seq"]),
+                    "live": {str(k): v for k, v in state["live"].items()},
                     "frames": list(state["frames"])[:40],
                     **({"error": state["error"]} if "error" in state else {}),
                 }).encode()
