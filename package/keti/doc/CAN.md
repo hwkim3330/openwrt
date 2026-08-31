@@ -423,3 +423,58 @@ the vehicle powered: CAN_H to GND and CAN_L to GND should each sit near 2.5 V. Z
 volts means the chassis is not driving the bus, and no amount of rewiring at this
 end will change that. A second CAN adapter wired back to back would equally prove
 the host side independently of the vehicle.
+
+### The chassis is not dead — the serial port proves it
+
+Connecting the supplied USB-to-RS232 lead settles a question CAN could not. At
+115200 the chassis emits a continuous, cleanly framed stream:
+
+    5A A5 0A AA 06 00 00 00 00 1C 00 4C 21
+    5A A5 0A AA 07 00 00 00 02 0C 00 27 EF
+    ^^^^^ ^^ ^^ ^^                   ^^^^^
+    sync  len ?  seq                 tail
+
+1299 frames in the first sixteen kilobytes with **one** byte outside a frame, and
+byte 4 cycling 1..7 evenly - seven message types in rotation. Nothing about that is
+a chassis that has failed. So the CAN silence is between the connector and the
+adapter, or in the CAN peripheral alone, and "the vehicle is broken" was too broad.
+
+`tools/candiag/serweb.py` shows this stream in a browser, framed and counted.
+
+The baud rate was found by sweeping, not by being told: 19200 produces a tidy
+repeating `42 xx` that looks convincing and is an artifact of the wrong rate, which
+is worth knowing before trusting a pattern.
+
+### v1 is the protocol, and the byte layout is confirmed
+
+Manual page 7, tables 3.3 and 3.4, read from the rendered page rather than from
+extracted text:
+
+`0x130` control, 20 ms, 500 ms timeout:
+
+| byte | field | notes |
+|---|---|---|
+| 0 | control mode | `0x00` remote, `0x01` CAN command, **`0x02` serial** |
+| 1 | fault clear | |
+| 2 | linear % | int8, max 3.0 m/s, (-100, 100) |
+| 3 | angular % | int8, max 2.5235 rad/s |
+| 4 | lateral % | int8, max 2.0 m/s |
+| 5 | reserved | `0x00` |
+| 6 | count | 0-255 rolling |
+| 7 | checksum | |
+
+`0x131` feedback, 20 ms: linear, angular and lateral each signed int16 **times
+1000** - so 0.001 m/s and 0.001 rad/s resolution.
+
+### Serial control mode exists but is not documented
+
+Byte 0 of `0x130` can select serial control, so the chassis can be driven that way.
+The manual does not say how: the serial protocol is documented only for firmware
+upgrade, and the mode is selected through a CAN frame - which is circular when CAN
+is the thing that is not working.
+
+The upgrade procedure is worth knowing for a different reason. The chassis waits
+**six seconds at power-on** before entering the application, and the client connects
+during that window. So the `5A A5` frames are the application, and there is a
+bootloader underneath reachable only in those six seconds. Anything written to this
+port during power-on risks landing in it.
