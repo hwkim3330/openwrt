@@ -527,3 +527,28 @@ path. Fixing CAN is the supported route.
 What has not been tested, and should be before anything else: **a loopback at the
 adapter.** Short its TX to its RX and send. That separates "our transmit is dead"
 from "the chassis is refusing", and every remaining hypothesis depends on which.
+
+### The host-to-adapter direction is proven, and CAN cannot be self-tested
+
+Two results from trying to verify the CAN side with nothing attached.
+
+**slcan cannot do internal loopback.** `ip link set can0 type can loopback on`
+returns `Operation not supported`, because slcan is a serial protocol and does not
+expose the controller's ctrlmode. And a lone CAN node cannot complete a transmission
+whatever the wiring: CAN requires another node to ACK, so shorting CAN_H to CAN_L
+proves nothing. With one adapter and no second node the CAN transmit path is not
+testable. That is a property of CAN, not a gap in the tooling.
+
+**Writes do reach the adapter.** slcan's `V` command returns a version string, and
+the CANable2 answered:
+
+    V\r  ->  16e7497-dirty github.com/normaldotcom/canable2.git
+
+So the host-to-adapter direction works. Whatever is wrong is beyond the adapter -
+not the driver, not the USB path, not this code. `canweb.py --dev /dev/ttyACM2`
+probes this at startup and shows it on the page, because "a silent bus" and "a dead
+write path" look identical from every other angle and this separates them in one
+line.
+
+Note the port has to be free to probe: slcand owns it once the interface is up, and
+two readers on one serial line turn the stream to nonsense.

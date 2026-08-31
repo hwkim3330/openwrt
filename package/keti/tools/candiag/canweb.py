@@ -83,6 +83,36 @@ state = {
 lock = threading.Lock()
 
 
+def adapter_probe(dev):
+    """Ask the adapter who it is, which also proves writes reach it.
+
+    slcan's `V` returns a version string. Getting one back is the only cheap proof
+    that the host-to-adapter direction works at all - and that mattered here,
+    because a silent CAN bus and a dead write path look identical from every other
+    angle. The CANable2 answered
+    `16e7497-dirty github.com/normaldotcom/canable2.git`, so the silence is beyond
+    the adapter rather than inside it.
+
+    Only run when the bus is not up: slcand owns the port while it is, and two
+    readers on one serial line is how a stream turns to nonsense.
+    """
+    try:
+        import serial
+    except Exception:
+        return None
+    try:
+        with serial.Serial(dev, 115200, timeout=0.6) as s:
+            s.write(b"C\r")
+            time.sleep(0.15)
+            s.reset_input_buffer()
+            s.write(b"V\r")
+            time.sleep(0.3)
+            v = s.read(96).decode(errors="replace").strip()
+            return v or None
+    except Exception:
+        return None
+
+
 def read_counters(iface):
     """RX/TX and the CAN error states, from `ip -s -details link`.
 
@@ -172,7 +202,8 @@ PAGE = r"""<!doctype html>
   <div class="card"><h2>Frames</h2><div class="big" id="total">0</div>
     <div class="dim" id="rate">0 /s</div></div>
   <div class="card"><h2>Bus</h2><div id="bus"></div></div>
-  <div class="card"><h2>Errors</h2><div id="err"></div></div>
+  <div class="card"><h2>Errors</h2><div id="err"></div>
+    <div class="dim" id="adapter" style="margin-top:6px;font-size:11px"></div></div>
 </div>
 <div id="verdict">waiting…</div>
 <div class="row" style="grid-template-columns:1fr 1fr">
@@ -207,6 +238,7 @@ async function tick(){
   else if(c.up){ v='<b>Nothing on the line at all.</b> No frames and no errors: either nothing is transmitting, or CAN_H and CAN_L are swapped — a swapped pair reads every dominant bit as recessive and is completely silent.'; border='var(--bad)'; }
   else { v='Interface is down.'; border='var(--bad)'; }
   const el=document.getElementById('verdict'); el.innerHTML=v; el.style.borderLeftColor=border;
+  document.getElementById('adapter').textContent = d.adapter ? ('adapter: '+d.adapter) : '';
 
   let h='<tr><th>id</th><th>meaning</th><th>n</th><th>last data</th></tr>';
   for(const [id,e] of Object.entries(d.ids).sort((a,b)=>b[1].count-a[1].count))
@@ -239,6 +271,7 @@ class H(BaseHTTPRequestHandler):
                     "counters": state["counters"],
                     "ids": ids,
                     "frames": list(state["frames"])[:40],
+                    "adapter": state.get("adapter"),
                 }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -259,8 +292,12 @@ def main():
     ap.add_argument("--iface", default="can0")
     ap.add_argument("--port", type=int, default=8091)
     ap.add_argument("--bind", default="127.0.0.1")
+    ap.add_argument("--dev", default="",
+                    help="the adapter's serial device, to identify it at startup")
     a = ap.parse_args()
     state["iface"] = a.iface
+    # Probed once at startup, before slcand can be holding the port.
+    state["adapter"] = adapter_probe(a.dev) if a.dev else None
     threading.Thread(target=dumper, args=(a.iface,), daemon=True).start()
     threading.Thread(target=poller, args=(a.iface,), daemon=True).start()
     print(f"  {a.iface} -> http://localhost:{a.port}/")
