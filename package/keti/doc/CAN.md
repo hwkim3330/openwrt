@@ -575,9 +575,15 @@ The software queue can only overflow if the hardware FIFO is full and staying fu
 and the only thing that keeps it full is a peripheral that accepted frames and is
 retransmitting them because nothing acknowledges.
 
-Measured, with nothing attached: 0x04 at the start, 0x14 after 200 frames at 1 kHz.
-Bit 4 set. **The adapter is fine.** It is initialised, it took the frames, and it is
-retrying them into an empty bus. So the silence on this bench was never the adapter.
+Measured from a clean power-on, with nothing attached: **0x00 at the start, 0x10
+after 200 frames at 1 kHz.** Bit 4 and nothing else. **The adapter is fine.** Zero at
+the start rules out a peripheral that failed to initialise, and CAN_TXFAIL never
+appearing means the HAL refused nothing - the peripheral accepted every frame until
+its FIFO was full, then held them. So the silence on this bench was never the
+adapter.
+
+(An earlier run read 0x04 -> 0x14. The extra bit was CAN_TXFAIL latched from some
+earlier moment in the session, which is exactly the reason to replug first.)
 
 `package/keti/tools/candiag/selftest.py` runs this and prints a verdict. Two things
 it needs: auto-retransmission on (`A1` - with `A0` the controller gives up after one

@@ -36,8 +36,8 @@ the bit sounds like a complaint rather than a result.
 
 So **bit 4 setting is the pass condition** for a lone adapter. It means the
 peripheral is initialised, took the frames, and is retrying them - everything up to
-the transceiver is working. Measured on this adapter: 0x04 before, 0x14 after 200
-frames at 1 kHz.
+the transceiver is working. Measured on this adapter from a clean power-on: 0x00
+before, 0x10 after 200 frames at 1 kHz - bit 4 and nothing else.
 
 What this does not cover is the transceiver's differential output and the wiring
 past it. Nothing short of a second node or a meter covers that.
