@@ -496,3 +496,34 @@ So valid frames can be constructed. That is the prerequisite for driving over th
 port, and it is worth being explicit that constructing them is not the same as
 knowing what to put in them: the command frame's type byte and payload layout are
 still unknown, and this port also has a bootloader behind it.
+
+### Serial control: documented, and not the supported path
+
+The serial protocol is fully in hand. The SCOUT 2.0 manual section 3.4 gives it, our
+capture agreed with it byte for byte, and `tools/candiag/agxserial.py` implements
+both directions. Reading works perfectly. Writing does nothing: the mode command and
+a 300 mrad/s command for two and a half seconds both left the chassis motionless
+with its feedback at zero.
+
+Three things bear on whether to chase it:
+
+- **The chassis broadcasts seven message types and nothing else.** Every frame in a
+  6637-frame capture is `len 0x0A, type 0xAA`, ids 1-7, and every one passes the
+  checksum. There is no version frame and no serial number frame, so the firmware
+  version cannot be read - and querying it needs the transmit path that is not
+  working.
+- **Serial control mode is footnoted as needing chassis firmware V1.2.8 or later**,
+  and the same footnote sits on CAN *command* mode. An old chassis would refuse both.
+- **AgileX's own SDK does not use the serial port at all.** `ugv_sdk` contains
+  `protocol_v1` and `protocol_v2`, both CAN, and zero occurrences of "serial". Their
+  supported path is CAN, and `agilexrobotics/agilex_firmware` - the repository the
+  documentation points at for the upgrade tool - returns 404.
+
+So a firmware upgrade to unlock serial control would be chasing a corner the vendor
+does not support, using a tool that is not publicly available, over a transmit path
+that has never been shown to work - and the upgrade itself needs that same transmit
+path. Fixing CAN is the supported route.
+
+What has not been tested, and should be before anything else: **a loopback at the
+adapter.** Short its TX to its RX and send. That separates "our transmit is dead"
+from "the chassis is refusing", and every remaining hypothesis depends on which.
