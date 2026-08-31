@@ -128,6 +128,13 @@ def main():
     ap.add_argument("--mm-s", type=int, default=0, help="forward, mm/s")
     ap.add_argument("--mrad-s", type=int, default=0, help="yaw, 0.001 rad/s")
     ap.add_argument("--seconds", type=float, default=3.0)
+    # The mode gate turned out to be unverifiable on this vehicle: byte[1] of the
+    # system frame never moved even while the remote was plainly driving, so it is
+    # not the control mode here whatever the SCOUT 2.0 table says. That makes
+    # "refuse unless mode is serial" a gate on a reading that means nothing, and the
+    # only way left to learn whether the chassis accepts commands is to send one.
+    ap.add_argument("--force", action="store_true",
+                    help="drive without confirming serial mode - the vehicle may move")
     a = ap.parse_args()
 
     link = Link(a.dev)
@@ -175,8 +182,8 @@ def main():
         # Refuses unless the chassis is already in serial mode. Enabling implicitly
         # would mean one command both arming and moving, which is the shape of
         # interface that gets a vehicle away from someone.
-        if not before or before["mode"] != 0x02:
-            print("  섀시가 시리얼 모드가 아닙니다. 먼저 `enable` 을 실행하십시오.")
+        if not a.force and (not before or before["mode"] != 0x02):
+            print("  섀시가 시리얼 모드가 아닙니다. `enable` 후 재시도하거나 --force.")
             return 1
         data = list(struct.pack(">hh", a.mm_s, a.mrad_s)) + [0, 0]
         print(f"  {a.seconds}s 동안 {a.mm_s} mm/s, {a.mrad_s} mrad/s 유지 (20 Hz)")
