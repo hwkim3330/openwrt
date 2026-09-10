@@ -1,5 +1,31 @@
 # A3004NS-M sensor bridge
 
+> **This directory is now a working copy, not the home of this code.**
+>
+> It was split into two standalone repositories on 2026-09-10, with history intact:
+>
+> - **[a3004-sensor-bridge](https://github.com/hwkim3330/a3004-sensor-bridge)** —
+>   everything here except the vehicle, as an OpenWrt feed
+> - **[agilex-scout-mini](https://github.com/hwkim3330/agilex-scout-mini)** —
+>   `can-bridge`, `agx-cmd`, the CAN and RS232 notes, and the diagnostics
+>
+> The split line is which piece outlives which: the SCOUT is the constant and this
+> router is the part that may be swapped, so the vehicle work is no longer tied to
+> this board's tree.
+>
+> This copy stays because it is what the local build tree compiles from. Changes
+> should be made in the repositories above and brought back here, not the other way
+> round — or replace it with the feeds:
+>
+> ```sh
+> echo "src-git keti https://github.com/hwkim3330/a3004-sensor-bridge.git" >> feeds.conf.default
+> echo "src-git agilex https://github.com/hwkim3330/agilex-scout-mini.git" >> feeds.conf.default
+> ```
+>
+> The board port itself — the DTS, `mt7621.mk`, the mt76 DBDC patch and the MAC
+> fixup — is not part of either and stays in this tree, where
+> [openwrt#24707](https://github.com/openwrt/openwrt/pull/24707) is in review.
+
 An ipTIME A3004NS-M running OpenWrt as a self-contained sensor node: a USB
 camera and its microphone, an Ouster lidar on a gigabit port, optionally a
 USB-CAN adapter and a FlySky receiver, all visible on a dashboard that an
